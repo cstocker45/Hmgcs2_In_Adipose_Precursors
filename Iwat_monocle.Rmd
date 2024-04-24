@@ -1,0 +1,1976 @@
+---
+title: "IWAT_monocle"
+output:
+  pdf_document: default
+  html_document: default
+date: "2024-01-19"
+---
+#Initalizing
+```{r}
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(R.utils)
+library(monocle3)
+
+#Monocle3 only works with matrix version = 1.6.1 but seurat requries >1.6.3. So seurat and monocle3 cannot be loaded simultaneously. To make monocle3 work install the depreciated version, and the current 1.6.3 version for seurat.
+library(installr)
+uninstall.packages("Matrix")
+remotes::install_version("Matrix", version = "1.6.3")
+
+adipo <- RunUMAP(adipo, dims = 1:18)
+DimPlot(adipo, reduction = "umap", pt.size = 0.001)
+
+gene_annotation <- as.data.frame(rownames(adipo@reductions[["pca"]]@feature.loadings),
+                                 row.names = rownames(adipo@reductions[["pca"]]@feature.loadings))
+colnames(gene_annotation) <- "gene_short_name"
+
+
+cell_metadata <- as.data.frame(adipo@assays[["RNA"]]@counts@Dimnames[[2]],
+                               row.names = adipo@assays[["RNA"]]@counts@Dimnames[[2]])
+colnames(cell_metadata) <- "barcode"
+
+New_matrix <- adipo@assays[["RNA"]]@counts
+New_matrix <- New_matrix[rownames(adipo@reductions[["pca"]]@feature.loadings), ]
+expression_matrix <- New_matrix
+
+library(monocle3)
+
+cds_from_seurat <- new_cell_data_set(expression_matrix,
+                                     cell_metadata = cell_metadata,
+                                     gene_metadata = gene_annotation)
+
+
+recreate.partition <- c(rep(1, length(cds_from_seurat@colData@rownames)))
+names(recreate.partition) <- cds_from_seurat@colData@rownames
+recreate.partition <- as.factor(recreate.partition)
+
+cds_from_seurat@clusters@listData[["UMAP"]][["partitions"]] <- recreate.partition
+
+
+
+list_cluster <- adipo@active.ident
+names(list_cluster) <- adipo@assays[["RNA"]]@data@Dimnames[[2]]
+
+cds_from_seurat@clusters@listData[["UMAP"]][["clusters"]] <- list_cluster
+
+
+
+cds_from_seurat@clusters@listData[["UMAP"]][["louvain_res"]] <- "NA"
+
+
+cds_from_seurat@int_colData@listData$reducedDims@listData[["UMAP"]] <-adipo@reductions[["umap"]]@cell.embeddings 
+
+
+cds_from_seurat@reduce_dim_aux$gene_loadings <- adipo@reductions[["pca"]]@feature.loadings
+
+cds_from_seurat <- learn_graph(cds_from_seurat, use_partition = F, close_loop = T)
+
+#plot by seurat clustering
+plot_cells(cds_from_seurat, 
+                   color_cells_by = 'cluster',
+                   label_groups_by_cluster=TRUE, label_cell_groups = FALSE,
+                   label_leaves=FALSE,
+                   label_branch_points=TRUE,
+           graph_label_size=4)
+
+#can skip this if u dont want to reform the trajectory path
+cds_from_seurat <- learn_graph(cds_from_seurat, use_partition = T)
+
+plot_cells(cds_from_seurat, color_cells_by = "partition")
+
+##Testing new clustering
+#I want to adjust the subclustering here
+cds_from_seurat <- cluster_cells(cds_from_seurat, k = 4)
+plot_cells(cds_from_seurat, color_cells_by = "partition")
+
+#reconstructing trajectories here
+#Testing.
+cds_from_seurat <- learn_graph(cds_from_seurat, use_partition = F, close_loop = F)
+plot_cells(cds_from_seurat, color_cells_by = "partition")
+
+
+#Now we construct a trajectory graph using these 'partitions = subclustering'
+cds_from_seurat <- learn_graph(cds_from_seurat)
+plot_cells(cds_from_seurat,
+           color_cells_by = "partition",
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE)
+
+plot_cells(cds_from_seurat,
+           genes=c("Hmgcs2", "Ucp1"),
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+cluster_genes <- c("Egr1", "Lox", "F3", "Cdh5", "Hmgcs2")
+plot_cells(cds_from_seurat,
+           genes=cluster_genes,
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+#Pick a root cell population
+cds_from_seurat <- order_cells(cds_from_seurat)
+
+plot_cells(cds_from_seurat,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5)
+
+#Can subset based on different trajectories
+cds_sub <- choose_graph_segments(cds_from_seurat)
+
+#plot specific genes
+plot_cells(cds_from_seurat, genes=c("Hmgcs2", "Ucp1", "Lox", "Fabp4"),
+           show_trajectory_graph=FALSE,
+           label_cell_groups=FALSE,
+           label_leaves=FALSE)
+
+#create a subset to easily pseudotime plot of gene expression
+
+time_genes <- c("Irx1", "Irx2", "Irx3", "Irx4", "Irx5", "Irx6", "Ucp1")
+time_genes_cds <- cds_from_seurat[rowData(cds_from_seurat)$gene_short_name %in% time_genes, colData(cds_from_seurat)$cell.type %in% c("WAPs", "BAPs", "Mature Adipocyte")]
+time_genes_cds <- order_cells(time_genes_cds)
+
+plot_genes_in_pseudotime(cds_from_seurat,
+                         color_cells_by="embryo.time.bin",
+                         min_expr=0.5)
+```
+
+##Using SeuratWrappers package
+#Differential Expression Analysis - Monocle
+```{r}
+library(SeuratWrappers)
+cds_from_seurat <- as.cell_data_set(adipo)
+cds_from_seurat <- estimate_size_factors(cds_from_seurat)
+cds_from_seurat@rowRanges@elementMetadata@listData[["gene_short_name"]] <- rownames(adipo[["RNA"]])
+
+
+cds_from_seurat <- cluster_cells(cds_from_seurat, k = 20)
+plot_cells(cds_from_seurat, color_cells_by = "partition")
+
+cds_from_seurat <- learn_graph(cds_from_seurat, use_partition = F, close_loop = F)
+
+#plotting
+plot_cells(cds_from_seurat, 
+                   color_cells_by = 'partition',
+                   label_groups_by_cluster=TRUE, label_cell_groups = FALSE,
+                   label_leaves=FALSE,
+                   label_branch_points=TRUE,
+           graph_label_size=4)
+
+#Picking pseudotime
+cds_from_seurat <- order_cells(cds_from_seurat)
+
+plot_cells(cds_from_seurat,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+#First create a subset of only the genes which I want to study
+gene_set <- c("Lox", "Hmgcs2", "Ucp1", "Fabp4", "Pparg")
+gene_set_cds <- cds_from_seurat[rowData(cds_from_seurat)$gene_short_name %in% gene_set,
+                       colData(cds_from_seurat)$ident %in% c("BAPs", "WAPs", "Aregs", "E-ASC", "Mature Adipocyte")]
+geneset_cds <- order_cells(gene_set_cds)
+
+#plotting genes in pseudotime
+plot_genes_in_pseudotime(geneset_cds,
+                         color_cells_by="pseudotime",
+                         min_expr=0.3)
+
+#subset
+cds_subset <- choose_graph_segments(cds_from_seurat)
+
+cds_subset <- preprocess_cds(cds_subset, num_dim = 100)
+cds_subset <- reduce_dimension(cds_subset)
+cds_subset <- cluster_cells(cds_subset, k = 20)
+plot_cells(cds_subset, color_cells_by = "partition")
+
+cds_subset <- learn_graph(cds_subset, use_partition = F, close_loop = F)
+
+plot_cells(cds_subset, 
+                   color_cells_by = 'partition',
+                   label_groups_by_cluster=TRUE, label_cell_groups = FALSE,
+                   label_leaves=FALSE,
+                   label_branch_points=TRUE,
+           graph_label_size=4)
+
+
+```
+
+
+##Now, experimenting with subseting adipo BAP progenitors to analyze the differentiation pathway of the BAP cluster at a higher resolution
+```{r}
+library(tidyverse)
+library(dplyr)
+library(R.utils)
+library(monocle3)
+
+
+#Seurat clustering for import
+bap_obj <- subset(adipo, idents = c("BAPs"))
+
+bap_obj <- NormalizeData(bap_obj)
+bap_obj <- FindVariableFeatures(bap_obj, selection.method = "vst")
+bap_obj <- ScaleData(bap_obj, features = rownames(bap_obj))
+bap_obj <- RunPCA(bap_obj, npcs = 50)
+bap_obj <- FindNeighbors(bap_obj, dims = 1:8)
+bap_obj <- FindClusters(bap_obj, resolution = 0.1)
+
+bap_obj <- RunUMAP(bap_obj, dims = 1:8)
+DimPlot(bap_obj, reduction = "umap")
+
+#Subcluster without Aregs
+
+adipo <- subset(adipo, idents = c("BAPs", "WAPs", "E-ASC", "Mature Adipocyte"))
+
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo))
+adipo <- RunPCA(adipo, npcs = 50)
+adipo <- FindNeighbors(adipo, dims = 1:15)
+adipo <- FindClusters(adipo, resolution = 0.1)
+
+adipo <- RunUMAP(adipo, dims = 1:15)
+DimPlot(adipo, reduction = "umap")
+
+#Subset without E-ASC and Aregs
+adipo <- subset(adipo, idents = c("BAPs", "WAPs", "Mature Adipocyte"))
+
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo))
+adipo <- RunPCA(adipo, npcs = 50)
+adipo <- FindNeighbors(adipo, dims = 1:15)
+adipo <- FindClusters(adipo, resolution = 0.35)
+
+adipo <- RunUMAP(adipo, dims = 1:15)
+DimPlot(adipo, reduction = "umap")
+
+FeaturePlot(adipo, features = c("Egr1", "Lox", "Ucp1"))
+
+new.cluster.ids <- c("BAPs", "WAPs", "Mature Adipocytes", "Mature Adipocytes", "Mature Adipocytes", "Mature Adipocytes",
+    "Mature Adipocytes", "Mature Adipocytes")
+names(new.cluster.ids) <- levels(adipo)
+adipo <- RenameIdents(adipo, new.cluster.ids)
+adipo$seurat_clusters <- adipo@active.ident
+
+DimPlot(adipo, reduction = "umap")
+
+#adipo_cds
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(R.utils)
+library(monocle3)
+library(SeuratWrappers)
+
+adipo_cds <- as.cell_data_set(adipo)
+adipo_cds <- monocle3::estimate_size_factors(adipo_cds)
+adipo_cds@rowRanges@elementMetadata@listData[["gene_short_name"]] <- rownames(adipo[["RNA"]])
+
+#testing different plots of adipo_cds
+
+adipo_cds <- monocle3::preprocess_cds(adipo_cds, method = "PCA", norm_method = "none", num_dim = 100)
+#adipo_cds <- align_cds(adipo_cds, alignment_group = "timpoint")
+#adipo_cds <- align_cds(adipo_cds, residual_model_formula_str = ("~ orig.ident"))
+#adipo_cds <- align_cds(adipo_cds, alignment_group = ("timpoint"), residual_model_formula_str = ("~ timpoint"))
+#adipo_cds <- align_cds(adipo_cds)
+adipo_cds <- reduce_dimension(adipo_cds, reduction_method = 'UMAP', preprocess_method = "PCA")
+
+adipo_cds <- cluster_cells(adipo_cds, cluster_method = 'louvain')
+plot_cells(adipo_cds, color_cells_by = "partition")
+
+adipo_cds <- learn_graph(adipo_cds, use_partition = F, close_loop = F)
+
+#plotting
+plot_cells(adipo_cds, 
+                   color_cells_by = 'partition',
+                   label_groups_by_cluster=TRUE, label_cell_groups = FALSE,
+                   label_leaves=FALSE,
+                   label_branch_points=TRUE,
+           graph_label_size=4)
+
+adipo_cds <- order_cells(adipo_cds)
+
+plot_cells(adipo_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(adipo_cds,
+           color_cells_by = "seurat_clusters",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(adipo_cds,
+           color_cells_by = "timpoint",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(adipo_cds, 
+           genes = c("Klf4", "Hmgcs2", "Cebpd", "Pparg", "Egr1", "Ucp1"), 
+           label_cell_groups=FALSE, 
+           label_leaves=FALSE, 
+           label_branch_points=FALSE, 
+           graph_label_size=2, 
+           cell_size = 1)
+
+
+
+
+
+
+#adipo_cds <- monocle3::preprocess_cds(adipo_cds, method = "PCA", norm_method = "none", num_dim = 30)
+#adipo_cds <- align_cds(adipo_cds, alignment_group = "timpoint", residual_model_formula_str = ("~ timpoint"))
+adipo_cds <- align_cds(adipo_cds)
+adipo_cds <- reduce_dimension(adipo_cds)
+
+adipo_cds <- cluster_cells(adipo_cds, k = 20, cluster_method = 'leiden')
+plot_cells(adipo_cds, color_cells_by = "partition")
+
+adipo_cds <- learn_graph(adipo_cds, use_partition = , close_loop = F)
+
+#plotting
+plot_cells(adipo_cds, 
+                   color_cells_by = 'partition',
+                   label_groups_by_cluster=TRUE, label_cell_groups = FALSE,
+                   label_leaves=FALSE,
+                   label_branch_points=TRUE,
+           graph_label_size=4)
+
+adipo_cds <- order_cells(adipo_cds)
+
+plot_cells(adipo_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(adipo_cds, 
+           genes = c("Klf4", "Cebpb", "Cebpd", "Pparg", "Egr2"), 
+           label_cell_groups=FALSE, 
+           label_leaves=FALSE, 
+           label_branch_points=FALSE, 
+           graph_label_size=4, 
+           cell_size = 1)
+
+#bap_cds
+library(SeuratWrappers)
+bap_cds <- as.cell_data_set(bap_obj)
+bap_cds <- estimate_size_factors(bap_obj)
+bap_cds@rowRanges@elementMetadata@listData[["gene_short_name"]] <- rownames(bap_obj[["RNA"]])
+
+bap_cds <- monocle3::preprocess_cds(bap_cds, method = "PCA", norm_method = "none", num_dim = 15)
+#bap_cds <- align_cds(bap_cds, alignment_group = "timpoint", residual_model_formula_str = ("~ timpoint"))
+bap_cds <- align_cds(bap_cds, residual_model_formula_str = ("~ orig.ident"))
+bap_cds <- reduce_dimension(bap_cds)
+
+bap_cds <- cluster_cells(bap_cds, k = 20, cluster_method = 'leiden')
+plot_cells(bap_cds, color_cells_by = "partition")
+
+bap_cds <- learn_graph(bap_cds, use_partition = F, close_loop = F)
+
+#plotting
+plot_cells(bap_cds, 
+                   color_cells_by = 'partition',
+                   label_groups_by_cluster=TRUE, label_cell_groups = FALSE,
+                   label_leaves=FALSE,
+                   label_branch_points=TRUE,
+           graph_label_size=4)
+
+bap_cds <- order_cells(bap_cds)
+
+plot_cells(bap_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(bap_cds, 
+           genes = c("Klf4", "Cebpb", "Cebpd", "Pparg", "Egr2"), 
+           label_cell_groups=FALSE, 
+           label_leaves=FALSE, 
+           label_branch_points=FALSE, 
+           graph_label_size=4, 
+           cell_size = 1)
+```
+#Importing Seurat Directly; No modifications
+```{r}
+library(SeuratWrappers)
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(R.utils)
+library(monocle3)
+library(SeuratWrappers)
+adipo_cds <- as.cell_data_set(adipo)
+adipo_cds <- estimate_size_factors(adipo_cds)
+adipo_cds@rowRanges@elementMetadata@listData[["gene_short_name"]] <- rownames(adipo[["RNA"]])
+
+adipo_cds <- cluster_cells(adipo_cds, reduction_method = "UMAP", 
+                           k = 10,
+                           cluster_method = 'leiden')
+
+plot_cells(adipo_cds, color_cells_by = "partition")
+
+adipo_cds <- learn_graph(adipo_cds, use_partition = F, close_loop = T, learn_graph_control=list(geodesic_distance_ratio = 0.5, euclidean_distance_ratio = 2))
+
+#adipo_cds <- learn_graph(adipo_cds, use_partition = F, close_loop = T, learn_graph_control=list(geodesic_distance_ratio = 0.5, euclidean_distance_ratio = 2, ncenter = 1000))
+
+#plotting
+plot_cells(adipo_cds, 
+           color_cells_by = 'partition',
+           label_groups_by_cluster=TRUE, 
+           label_cell_groups = FALSE,
+           label_leaves=FALSE,
+           label_branch_points=TRUE,
+           graph_label_size=4)
+
+adipo_cds <- order_cells(adipo_cds)
+
+
+plot_cells(adipo_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4) 
+
+#Figure
+plot_cells(adipo_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), axis.line.x = element_blank(), axis.line.y = element_blank())
+
+plot_cells(adipo_cds,
+           color_cells_by = "seurat_clusters",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(adipo_cds,
+           color_cells_by = "timpoint",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(adipo_cds, 
+           genes = c("Klf4", "Hmgcs2", "Cebpd", "Pparg", "Egr1", "Ucp1"), 
+           label_cell_groups=FALSE, 
+           label_leaves=FALSE, 
+           label_branch_points=FALSE, 
+           graph_label_size=2, 
+           cell_size = 1)
+
+
+#convert back to seurat format
+adipo_cds$monocle3_pseudotime <- pseudotime(adipo_cds)
+integrated_adipo <- as.Seurat(adipo_cds, assay = NULL)
+
+FeaturePlot(integrated_adipo, features = "monocle3_pseudotime")
+FeaturePlot(integrated_adipo, features = c("Hmgcs2", "Ucp1"), order = T)
+FeaturePlot(adipo, features = c("Hmgcs2", "Ucp1"), order = F)
+
+#Making pretty pseudotime plot
+plot_cells(adipo_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=6,
+          trajectory_graph_color = "blue") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), axis.line.x = element_blank(), axis.line.y = element_blank())
+
+
+#Plotting in pseudotime together
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2", "Cebpb", "Cebpd", "Creb5", "Pdgfra", "Pdgfrb", "Ppargc1a", "Adipoq", "Ucp1"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+#plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = T)
+
+#Plotting ASC -> dpp4- ASC, adipoccyte, mature
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Dpp4", "Pdgfra", "Hmgcs2", "Pparg", "Ucp1"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 5)
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Dpp4", "Pi16", "Pdgfra", "Cebpd", "Cebpa", "Pparg", "Zfp423", "Adipoq", "Ucp1", "Hmgcs2"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = F, horizontal_jitter = F, ncol= 5, cell_size = 0) + theme()
+
+#Figure Generation
+
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Dpp4"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot1<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() + theme(plot.title = element_text(face = 'italic'))
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Ly6a"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot2<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank(), plot.title = element_text(face = 'italic'))
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Pdgfra"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot3<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank(), plot.title = element_text(face = 'italic'))
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Cebpd"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot4<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank(), plot.title = element_text(face = 'italic'))
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Cebpa"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot5<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank(), plot.title = element_text(face = 'italic'))
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Adipoq"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot6<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank(), plot.title = element_text(face = 'italic'))
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Ucp1"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot7<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank(), plot.title = element_text(face = 'italic'))
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot8<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank(), plot.title = element_text(face = 'italic'))
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Ucp1"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot9<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Ffar2"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot_ffar2<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hcar2"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot_hcar2<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+library(ggpubr)
+figure <- ggarrange(plot1, plot2, plot3, plot4, plot5, plot6, plot7, plot8,
+                    ncol = 8, nrow = 1)
+figure & theme(plot.title = element_text("italic"))
+
+
+#make a plot for legend only
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 3) + theme(axis.title.y = element_blank()) 
+
+#Going to run this again but also with ketone utilization genes
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Oxct1"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot_oxct1<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Ffar2"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot_ffar2<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hcar2"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot_hcar2<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Slc16a1"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot_slc16a1<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Slc16a7"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot_slc16a7<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+
+
+library(ggpubr)
+figure <- ggarrange(plot1, plot2, plot3, plot4, plot5, plot6, plot7, plot8, plot9,
+                    ncol = 9, nrow = 1)
+figure
+
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Dpp4"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "pseudotime", vertical_jitter = T, horizontal_jitter = T, ncol= 1)
+
+#Plotting ketogenic related genes
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2", "Creb5", "Oxct1", "Slc16a1", "Slc16a7", "Slc16a6", "Ffar2", "Hcar2","Ppargc1a", "Adipoq", "Ucp1"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+#plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = T)
+
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "pseudotime", vertical_jitter = T, horizontal_jitter = T, ncol= 11) + NoLegend()
+
+
+##Plotting genes co-expressed with Hmgcs2
+
+#time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2", "Creb5", "Hmcn", "Serpinf1", "Robo2", "Penk", "Ifitm3", "Cenpp", "Cdh11"))) 
+
+#time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2", "Creb5", "Dcn", "Fam102b", "Rnase4", "Prdx1", "Tgfbr1", "Col13a1", "Gm30075"))) 
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2", "Creb5", "Lama2", "Rerg", "Rabgap1l", "Pabpc4l", "Hsd11b1", "Gm166638", "Adipoq", "Ucp1")))
+
+time_genes_cds <- adipo_cds[time_genes,]
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = T, ncol= 9)
+
+
+#Plotting 2nd gene set co-expressed with Hmgcs2
+#time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2", "Creb5", "Gm8113", "Stat5b", "Prdx1", "Mgp", "Tpm4", "Fzd1", "Igfbp6")))
+#time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2", "Creb5", "Rpl36", "Gpbp1l1", "Wipf1", "H2afy", "Ercc6l2", "Sec61a2", "Gulp1")))
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2", "Creb5", "Serf2", "Ift81", "Adipoq", "Ucp1")))
+
+time_genes_cds <- adipo_cds[time_genes,]
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = T, ncol= 9)
+
+
+
+#Plotting in pseudotime seperately
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = T)
+
+ucp1_pseudo_plot <- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "pseudotime", vertical_jitter = T, horizontal_jitter = T, ncol= 2)
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = T)
+
+hmgcs2_pseudo_plot <- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "pseudotime", vertical_jitter = T, horizontal_jitter = T, ncol= 2)
+
+#Plot in pseudotime, but only specific cluster
+gene_set <- c("Hmgcs2", "Ucp1", "Fabp4", "Pparg")
+gene_set_cds <- adipo_cds[rowData(adipo_cds)$gene_short_name %in% gene_set,
+                       colData(adipo_cds)$seurat_clusters %in% c("BAPs", "WAPs")]
+plot_genes_in_pseudotime(gene_set_cds, color_cells_by = "pseudotime", vertical_jitter = T, horizontal_jitter = T)
+
+
+
+#Ridge plot with integrated seurat object
+RidgePlot(integrated_adipo, features = c("Hmgcs2", "Ucp1"), layer = "monocle3_pseudotime")
+
+```
+
+
+#Plotting variable genes over pseudotime
+```{r}
+ciliated_cds_pr_test_res <- graph_test(adipo_cds, neighbor_graph="principal_graph", cores=4)
+pr_deg_ids <- row.names(subset(ciliated_cds_pr_test_res, q_value < 0.05))
+
+gene_module_df <- find_gene_modules(adipo_cds[pr_deg_ids,], resolution=1e-2)
+
+
+```
+
+
+
+```{r}
+#CL adipo object trajectory analysis
+
+library(SeuratWrappers)
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(R.utils)
+library(monocle3)
+library(SeuratWrappers)
+cl_adipo_cds <- as.cell_data_set(cl_adipo)
+cl_adipo_cds <- estimate_size_factors(cl_adipo_cds)
+cl_adipo_cds@rowRanges@elementMetadata@listData[["gene_short_name"]] <- rownames(cl_adipo[["RNA"]])
+
+cl_adipo_cds <- cluster_cells(cl_adipo_cds, reduction_method = "UMAP", 
+                           k = 8,
+                           cluster_method = 'leiden')
+
+plot_cells(cl_adipo_cds, color_cells_by = "partition")
+
+#cl_adipo_cds <- learn_graph(cl_adipo_cds, use_partition = F, close_loop = T, learn_graph_control=list(geodesic_distance_ratio = 0.5, euclidean_distance_ratio = 2))
+
+cl_adipo_cds <- learn_graph(cl_adipo_cds, use_partition = F, close_loop = T)
+
+#adipo_cds <- learn_graph(adipo_cds, use_partition = F, close_loop = T, learn_graph_control=list(geodesic_distance_ratio = 0.5, euclidean_distance_ratio = 2, ncenter = 1000))
+
+#plotting
+plot_cells(cl_adipo_cds, 
+           color_cells_by = 'partition',
+           label_groups_by_cluster=TRUE, 
+           label_cell_groups = FALSE,
+           label_leaves=FALSE,
+           label_branch_points=TRUE,
+           graph_label_size=4)
+
+cl_adipo_cds <- order_cells(cl_adipo_cds)
+
+
+plot_cells(cl_adipo_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4) 
+
+#Figure
+plot_cells(cl_adipo_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=5,
+           trajectory_graph_color = "blue") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), axis.line.x = element_blank(), axis.line.y = element_blank())
+
+
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Dpp4"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot1<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() 
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Ly6a"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot2<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank())
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Pdgfra"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot3<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank())
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Cebpd"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot4<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank())
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Hmgcs2"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot5<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank())
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Cebpa"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot6<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank())
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Pparg"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot7<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank())
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Adipoq"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot8<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend() +theme(axis.title.y = element_blank())
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Ucp1"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot9<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Ffar2"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot_ffar2<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Hcar2"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot_hcar2<- plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 0.5) + NoLegend()+theme(axis.title.y = element_blank()) 
+
+library(ggpubr)
+figure <- ggarrange(plot1, plot2, plot3, plot4, plot6, plot8, plot9,
+                    ncol = 7, nrow = 1)
+figure
+
+plot5
+
+#make a plot for legend only
+time_genes <- row.names(subset(fData(cl_adipo_cds), gene_short_name %in% c("Hmgcs2"))) 
+time_genes_cds <- cl_adipo_cds[time_genes,]
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "seurat_clusters", vertical_jitter = T, horizontal_jitter = F, ncol= 1, cell_size = 1) + theme(axis.title.y = element_blank()) 
+
+Idents(cl_adipo) <- cl_adipo$timpoint
+VlnPlot(cl_adipo, features = c("Dpp4", "Pi16", "Pdgfra", "Cebpd", "Hmgcs2", "Cebpa", "Pparg", "Adipoq", "Ucp1", "Ffar2", "Hcar2"))
+
+vln_df = data.frame(Hmgcs2 = adipo[["RNA"]]@data["Hmgcs2",], Timepoint = adipo$timpoint)
+ggplot(vln_df, aes(x = Timepoint, y = Hmgcs2)) + geom_violin(aes(fill = Timepoint), adjust = 4, trim=TRUE, scale = "width") + geom_jitter(size = 0.5) + theme_bw() + ggtitle("Adipocytes - CE") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5)) 
+
+#Pseudobulk Seurat
+library(DESeq2)
+
+# pseudobulk the counts based on donor-condition-celltype
+pseudo_adipo <- AggregateExpression(adipo, assays = "RNA", return.seurat = T, group.by = c("seurat_clusters", "timpoint"))
+
+pseudo_adipo <- NormalizeData(pseudo_adipo)%>% FindVariableFeatures() %>% ScaleData()%>% RunPCA(npcs = 10)
+pseudo_adipo$seurat_clusters <- sapply(strsplit(Cells(pseudo_adipo), split = '_'), '[', 2)
+
+DimPlot(pseudo_adipo, group.by = 'seurat_clusters', label = TRUE,  reduction = 'pca')
+DoHeatmap(pseudo_adipo, "Hmgcs2")
+
+
+
+
+
+# each 'cell' is a donor-condition-celltype pseudobulk profile
+tail(Cells(pseudo_adipo))
+
+pseudo_adipo$celltype.stim <- paste(pseudo_adipo$timpoint, pseudo_adipo$seurat_clusters, sep = "_")
+Idents(pseudo_adipo) <- "celltype.stim"
+
+#can test pseudobulk against 1 cluster and timpoint
+bulk.mono.de <- FindMarkers(object = pseudo_adipo, 
+                         ident.1 = "24hr_MSCs", 
+                         ident.2 = "48hr_MSCs",
+                         test.use = "DESeq2")
+head(bulk.mono.de, n = 15)
+
+# compare the DE P-values between the single-cell level and the pseudobulk level results
+names(bulk.mono.de) <- paste0(names(bulk.mono.de), ".bulk")
+bulk.mono.de$gene <- rownames(bulk.mono.de)
+
+names(mono.de) <- paste0(names(mono.de), ".sc")
+mono.de$gene <- rownames(mono.de)
+
+merge_dat <- merge(mono.de, bulk.mono.de, by = "gene")
+merge_dat <- merge_dat[order(merge_dat$p_val.bulk), ]
+
+# Number of genes that are marginally significant in both; marginally significant only in bulk; and marginally significant only in single-cell
+common <- merge_dat$gene[which(merge_dat$p_val.bulk < 0.05 & 
+                                merge_dat$p_val.sc < 0.05)]
+only_sc <- merge_dat$gene[which(merge_dat$p_val.bulk > 0.05 & 
+                                  merge_dat$p_val.sc < 0.05)]
+only_bulk <- merge_dat$gene[which(merge_dat$p_val.bulk < 0.05 & 
+                                    merge_dat$p_val.sc > 0.05)]
+print(paste0('# Common: ',length(common)))
+
+# create a new column to annotate sample-condition-celltype in the single-cell dataset
+pseudo_adipo$timpoint <- paste0(adipo$seurat_clusters, "-", adipo$timpoint)
+
+# generate violin plot 
+Idents(ifnb) <- "celltype.stim"
+print(merge_dat[merge_dat$gene%in%common[1:2],c('gene','p_val.sc','p_val.bulk')])
+
+```
+
+
+```{r}
+#Pseudobulk
+##Pseudobulk for adipo object
+
+x_text_size <- 7
+
+#Pseudobulk Dpp4
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Dpp4", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_dpp4 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Dpp4") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("Relative Expression") + xlab("")
+
+
+
+#Pseudobulk Pi16
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Pi16", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_Pi16 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Pi16") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+
+#Pseudobulk
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Pdgfra", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_pdgfra <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Pdgfra") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Cebpd
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Cebpd", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_cebpd <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Cebpd") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+
+#Pseudobulk Hmgcs2
+
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Hmgcs2", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_hmgcs2 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Hmgcs2") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Cebpa
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Cebpa", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_cebpa <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Cebpa") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Pparg
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Pparg", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_pparg <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Pparg") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Adipoq
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Adipoq", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_adipoq <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Adipoq") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+
+#Pseudobulk Ucp1
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Ucp1", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_ucp1 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Ucp1") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Ffar2
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Ffar2", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_ffar2 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Ffar2") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Hcar2
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Hcar2", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+CE_pseudo_hcar2 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Hcar2") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+
+#Plotting
+
+library(ggpubr)
+figure <- ggarrange(CE_pseudo_dpp4, CE_pseudo_Pi16, CE_pseudo_pdgfra, CE_pseudo_cebpd, CE_pseudo_hmgcs2, CE_pseudo_cebpa, CE_pseudo_pparg, CE_pseudo_adipoq, CE_pseudo_ucp1, CE_pseudo_ffar2, CE_pseudo_hcar2,
+                    ncol = 11, nrow = 1)
+figure
+
+
+##Pseudobulk for CL condition
+
+x_text_size <- 7
+
+#Pseudobulk Dpp4
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Dpp4", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_dpp4 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Dpp4") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("Relative Expression") + xlab("")
+
+
+
+#Pseudobulk Pi16
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Pi16", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_Pi16 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Pi16") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+
+#Pseudobulk
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Pdgfra", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_pdgfra <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Pdgfra") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Cebpd
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Cebpd", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_cebpd <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Cebpd") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+
+#Pseudobulk Hmgcs2
+
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Hmgcs2", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_hmgcs2 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Hmgcs2") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Cebpa
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Cebpa", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_cebpa <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Cebpa") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Pparg
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Pparg", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_pparg <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Pparg") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Adipoq
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Adipoq", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_adipoq <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Adipoq") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+
+#Pseudobulk Ucp1
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Ucp1", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_ucp1 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Ucp1") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Ffar2
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Ffar2", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_ffar2 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Ffar2") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+#Pseudobulk Hcar2
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Hcar2", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+CL_pseudo_hcar2 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Hcar2") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size)) + ylab("") + xlab("")
+
+
+#Plotting
+library(ggpubr)
+figure <- ggarrange(CL_pseudo_dpp4, CL_pseudo_Pi16, CL_pseudo_pdgfra, CL_pseudo_cebpd, CL_pseudo_hmgcs2, CL_pseudo_cebpa, CL_pseudo_pparg, CL_pseudo_adipoq, CL_pseudo_ucp1, CL_pseudo_ffar2, CL_pseudo_hcar2,
+                    ncol = 11, nrow = 1)
+figure
+
+
+
+#Plot for legend
+data.df <- cl_adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- cl_adipo$RNA@data["Adipoq", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    ) + ggtitle("Adipoq") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size), legend.text = element_text(size=15)) + ylab("") + xlab("")
+
+#Plot for CE Legend
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Adipoq", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    ) + ggtitle("Adipoq") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=x_text_size), legend.text = element_text(size=15)) + ylab("") + xlab("")
+
+
+
+
+
+#Pseudobulk at IWAT level
+Idents(iwatobj) <- iwatobj$timpoint
+iwatobj_ce <- subset(iwatobj, idents = c("RT", "24hr", "48hr", "4day"))
+iwatobj_cl <- subset(iwatobj, idents = c("RT", "CL"))
+
+
+x_text_size = 12
+data.df <- iwatobj_ce@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- iwatobj_ce$RNA@data["Ucp1", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+iwatCE_pseudo_ucp1 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Ucp1") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='italic'), axis.text = element_text(size=x_text_size),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(), axis.line = element_line(color = 'black')
+  ) + ylab("Pseudobulk Expression") + xlab("")
+
+
+data.df <- iwatobj_ce@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- iwatobj_ce$RNA@data["Hmgcs2", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+iwatCE_pseudo_hmgcs2 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Hmgcs2") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='italic') , axis.text = element_text(size=x_text_size),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+  ) +
+#draws x and y axis line
+  theme(axis.line = element_line(color = 'black')) + ylab("") + xlab("")
+
+library(ggpubr)
+figure <- ggarrange(iwatCE_pseudo_ucp1, iwatCE_pseudo_hmgcs2,
+                    ncol = 2, nrow = 1)
+figure
+
+iwatCE_pseudo_ucp1 + iwatCE_pseudo_hmgcs2
+
+
+
+x_text_size = 12
+data.df <- iwatobj_cl@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- iwatobj_cl$RNA@data["Ucp1", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+iwatCL_pseudo_ucp1 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Ucp1") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='italic'), axis.text = element_text(size=x_text_size),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(), axis.line = element_line(color = 'black')
+  ) + ylab("Pseudobulk Expression") + xlab("")
+
+
+data.df <- iwatobj_cl@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- iwatobj_cl$RNA@data["Hmgcs2", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "CL"))
+iwatCL_pseudo_hmgcs2 <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Hmgcs2") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='italic') , axis.text = element_text(size=x_text_size),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+  ) +
+#draws x and y axis line
+  theme(axis.line = element_line(color = 'black')) + ylab("") + xlab("")
+
+library(ggpubr)
+figure <- ggarrange(iwatCL_pseudo_ucp1, iwatCL_pseudo_hmgcs2,
+                    ncol = 2, nrow = 1)
+figure
+
+
+
+```
+
+
+
+```{r}
+
+# Plotting faceted plot  
+ggplot(df,aes(x=pd,y=data,color=type))+stat_smooth(geom='line',alpha=0.8,size=1.5)+facet_wrap(~cluster,scales = "free_x",ncol=2)+theme_classic(base_size = size)+theme(strip.background = element_blank(),strip.text.x = element_blank(),legend.position = "none")+labs(x="Pseudotime",y="Average Expression")+scale_color_manual(values = mycolors)+scale_x_discrete(limits=c(0,0.5,1),expand = c(0.1, 0))
+ggsave(filename = "white.gene.cluster.profile.tiff",path = "~/summary_time_series/figures/v2/manuscript/tiffs/", width = 4, height = 4.5, device='tiff', dpi=dpi,units = "in")
+
+ggplot(df,aes(x=pd,y=data,color=type))+stat_smooth(geom='line',alpha=0.8,size=1.5)+facet_wrap(~cluster,scales = "free_x",ncol=2)+theme_classic(base_size = size)+theme(strip.background = element_blank(),strip.text.x = element_blank(),legend.position = "none")+labs(x="Pseudotime",y="Average Expression")+scale_color_manual(values = mycolors)+scale_x_discrete(limits=c(0,0.5,1),expand = c(0.1, 0))
+ggsave(filename = "white.gene.cluster.profile.tiff",path = "~/summary_time_series/figures/v2/manuscript/tiffs/", width = 4, height = 4.5, device='tiff', dpi=dpi,units = "in")
+
+
+time_genes <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Hmgcs2"))) 
+time_genes_cds <- adipo_cds[time_genes,]
+
+hm_integrated <- subset(integrated_adipo, features = ("Hmgcs2" > 0))
+pseudoplot(s.object = integrated_adipo, cell_order_variable = integrated_adipo$monocle3_pseudotime)
+
+
+
+a <- integrated_adipo[["RNA"]]@meta.features
+#b <- rownames(a)
+b <- row.names(subset(fData(adipo_cds), gene_short_name %in% c("Dpp4", "Pdgfra", "Hmgcs2", "Pparg", "Ucp1", "Adipoq")))
+var_list <- c("monocle3_pseudotime", b)
+x <- FetchData(integrated_adipo, vars = var_list)
+write.table(x, "pseudotime.csv", sep = "\t")
+
+x.pivot(index = "monocle3_pseudotime")
+df.pivot()
+
+ggplot(x,aes(x="monocle3_pseudotime", y=b, color=c("red", "black"))) +stat_smooth(geom='line',alpha=0.8,size=1.5)
+
++stat_smooth(geom='line',alpha=0.8,size=1.5)+facet_wrap(~cluster,scales = "free_x",ncol=2)+theme_classic(base_size = size)+theme(strip.background = element_blank(),strip.text.x = element_blank(),legend.position = "none")+labs(x="Pseudotime",y="Average Expression")+scale_color_manual(values = mycolors)+scale_x_discrete(limits=c(0,0.5,1),expand = c(0.1, 0))
+
+ggplot(x,aes(x="monocle3_pseudotime",y="Hmgcs2",color="black")) +stat_smooth(geom='line',alpha=0.8,size=1.5)
+
+df = data.frame()
+
+ggplot(df,aes(x=pd,y=data,color=type))
+
+
+library(ggplot2)
+expression_df <- data.frame(
+  pseudotime = integrated_adipo$monocle3_pseudotime,
+  group_name = c("Hmgcs2"),
+  expression
+)
+ggplot(expression_df) +
+  geom_point(aes(pseudotime, Mpo, colour = group_name)) +
+  theme_classic() +
+  scale_colour_brewer(palette = "Set1") +
+  labs(x = "Pseudotime", y = "Mpo expression", colour = "Group")
+ggsave("~/example3.png", width = 5, height = 4)
+```
+
+
+```{r}
+#BAPs + mature adipocytes monocle
+library(SeuratWrappers)
+bap_adipo_cds <- as.cell_data_set(bap_adipo)
+bap_adipo_cds <- estimate_size_factors(bap_adipo_cds)
+bap_adipo_cds@rowRanges@elementMetadata@listData[["gene_short_name"]] <- rownames(bap_adipo[["RNA"]])
+
+bap_adipo_cds <- cluster_cells(bap_adipo_cds, reduction_method = "UMAP", 
+                           k = 12,
+                           cluster_method = 'leiden')
+
+plot_cells(bap_adipo_cds, color_cells_by = "partition")
+
+bap_adipo_cds <- learn_graph(bap_adipo_cds, use_partition = F, close_loop = F)
+
+#plotting
+plot_cells(bap_adipo_cds, 
+           color_cells_by = 'partition',
+           label_groups_by_cluster=TRUE, 
+           label_cell_groups = FALSE,
+           label_leaves=FALSE,
+           label_branch_points=TRUE,
+           graph_label_size=4)
+
+bap_adipo_cds <- order_cells(bap_adipo_cds)
+
+
+plot_cells(bap_adipo_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(bap_adipo_cds,
+           color_cells_by = "seurat_clusters",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(bap_adipo_cds,
+           color_cells_by = "timpoint",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(bap_adipo_cds, 
+           genes = c("Klf4", "Hmgcs2", "Cebpd", "Pparg", "Egr1", "Ucp1"), 
+           label_cell_groups=FALSE, 
+           label_leaves=FALSE, 
+           label_branch_points=FALSE, 
+           graph_label_size=2, 
+           cell_size = 1)
+
+#Converted cds back to seurat
+bap_adipo_cds$monocle3_pseudotime <- pseudotime(bap_adipo_cds)
+integrated_bap_adipo <- as.Seurat(bap_adipo_cds, assay = NULL)
+FeaturePlot(integrated_bap_adipo, features = "monocle3_pseudotime")
+
+RidgePlot(integrated_bap_adipo, features = c("Hmgcs2", "Ucp1"), sort = T)
+
+#Plot genes in pseudotime
+
+time_genes <- row.names(subset(fData(bap_adipo_cds), gene_short_name %in% c("Hmgcs2", "Ucp1"))) 
+time_genes_cds <- bap_adipo_cds[time_genes,]
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "monocle3_pseudotime", vertical_jitter = T, horizontal_jitter = T)
+
+#Figures
+
+cluster2$TimePoint <- as.numeric(sub("Sample", "", cluster2$Sample))
+
+library(ggplot2)
+ggplot(cluster2, aes(TimePoint, expression)) +
+    geom_hline(yintercept = 0, linetype = 2, color = "red") +
+    # Line for each gene
+    geom_line(aes(group = rownames), size = 0.5, alpha = 0.3, color = "blue") + 
+    # Trend line
+    geom_smooth(size = 2, se = FALSE, color = "orange") +
+    scale_x_continuous(breaks = cluster2$TimePoint) +
+    theme_classic()
+
+
+```
+
+
+
+```{r}
+#WAPs + mature adipocytes monocle
+library(SeuratWrappers)
+wap_adipo_cds <- as.cell_data_set(wap_adipo)
+wap_adipo_cds <- estimate_size_factors(wap_adipo_cds)
+wap_adipo_cds@rowRanges@elementMetadata@listData[["gene_short_name"]] <- rownames(wap_adipo[["RNA"]])
+
+wap_adipo_cds <- cluster_cells(wap_adipo_cds, reduction_method = "UMAP", 
+                           k = 20,
+                           cluster_method = 'leiden')
+
+plot_cells(wap_adipo_cds, color_cells_by = "partition")
+
+wap_adipo_cds <- learn_graph(wap_adipo_cds, use_partition = F, close_loop = F)
+
+#plotting
+plot_cells(wap_adipo_cds, 
+           color_cells_by = 'partition',
+           label_groups_by_cluster=TRUE, 
+           label_cell_groups = FALSE,
+           label_leaves=FALSE,
+           label_branch_points=TRUE,
+           graph_label_size=4)
+
+wap_adipo_cds <- order_cells(wap_adipo_cds)
+
+
+plot_cells(wap_adipo_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(wap_adipo_cds,
+           color_cells_by = "seurat_clusters",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(wap_adipo_cds,
+           color_cells_by = "timpoint",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4)
+
+plot_cells(wap_adipo_cds, 
+           genes = c("Klf4", "Hmgcs2", "Cebpd", "Pparg", "Egr1", "Ucp1"), 
+           label_cell_groups=FALSE, 
+           label_leaves=FALSE, 
+           label_branch_points=FALSE, 
+           graph_label_size=2, 
+           cell_size = 1)
+
+wap_adipo_cds$monocle3_pseudotime <- pseudotime(wap_adipo_cds)
+integrated_wap_adipo <- as.Seurat(wap_adipo_cds, assay = NULL)
+FeaturePlot(integrated_wap_adipo, features = "monocle3_pseudotime")
+
+
+time_genes <- row.names(subset(fData(wap_adipo_cds), gene_short_name %in% c("Hmgcs2", "Ucp1"))) 
+time_genes_cds <- wap_adipo_cds[time_genes,]
+plot_genes_in_pseudotime(time_genes_cds, color_cells_by = "pseudotime", vertical_jitter = T, horizontal_jitter = T)
+
+
+```
+
+
+
+
+
+
+
+
+
+#I confirmed the data was retained; I will allow monocle to recluster here:
+#This is pretty much the same tho; Not using this
+```{r}
+cds2 <- preprocess_cds(cds_from_seurat, num_dim = 100)
+#Can factor out timepoint infp
+cds2 <- align_cds(cds2, alignment_group = "timpoint", residual_model_formula_str = "~ RT + 24hr + 48hr + 4day + CL")
+
+#Plot PCs
+plot_pc_variance_explained(cds2)
+
+#Dimension Reduction
+cds2 <- reduce_dimension(cds2)
+plot_cells(cds2, label_groups_by_cluster = TRUE)
+```
+
+
+```{r}
+#Exporting monocle3 object to tradeSeq
+
+cell_ids <- colnames(adipo)[adipo$seurat_clusters ==  "Multipotent Mesenchymal Stem Cells"]
+closest_vertex <- adipo_cds@principal_graph_aux[["UMAP"]]$pr_graph_cell_proj_closest_vertex
+closest_vertex <- as.matrix(closest_vertex[colnames(adipo_cds), ])
+closest_vertex <- closest_vertex[cell_ids, ]
+closest_vertex <- as.numeric(names(which.max(table(closest_vertex))))
+mst <- principal_graph(adipo_cds)$UMAP
+root_pr_nodes <- igraph::V(mst)$name[closest_vertex]
+
+
+library(magrittr)
+library(tradeSeq)
+# Get the closest vertice for every cell
+
+cds <- adipo_cds
+y_to_cells <-  principal_graph_aux(cds)$UMAP$pr_graph_cell_proj_closest_vertex %>%
+  as.data.frame()
+y_to_cells$cells <- rownames(y_to_cells)
+y_to_cells$Y <- y_to_cells$V1
+
+# Get the root vertices
+# It is the same node as above
+root <- cds@principal_graph_aux$UMAP$root_pr_nodes
+
+# Get the other endpoints
+endpoints <- names(which(igraph::degree(mst) == 1))
+endpoints <- endpoints[!endpoints %in% root]
+
+# For each endpoint
+cellWeights <- lapply(endpoints, function(endpoint) {
+  # We find the path between the endpoint and the root
+  path <- igraph::shortest_paths(mst, root, endpoint)$vpath[[1]]
+  path <- as.character(path)
+  # We find the cells that map along that path
+  df <- y_to_cells[y_to_cells$Y %in% path, ]
+  df <- data.frame(weights = as.numeric(colnames(cds) %in% df$cells))
+  colnames(df) <- endpoint
+  return(df)
+  }) %>% do.call(what = 'cbind', args = .) %>%
+    as.matrix()
+rownames(cellWeights) <- colnames(cds)
+pseudotime <- matrix(pseudotime(cds), ncol = ncol(cellWeights),
+                     nrow = ncol(cds), byrow = FALSE)
+
+counts <- adipo@assays$RNA$counts
+
+#cellWeights <- cellWeights + 0.01
+
+sce <- fitGAM(counts = counts,
+              pseudotime = pseudotime,
+              cellWeights = cellWeights)
+
+
+info <- extract_monocle_info(adipo_cds)
+sce <- fitGAM(counts = Biobase::exprs(adipo_cds),
+              cellWeights = info$cellWeights,
+              pseudotime = info$pseudotime)
+
+```
+
+```{r}
+#With importing now finished, we can begin analysis with TradeSeq
+
+assoRes <- associationTest(sce)
+head(assoRes)
+
+```
+
+
+
+#Final Figures Poster
+```{r}
+
+#Pseudobulk - Figure 5 pancel D
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Hmgcs2", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+#data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>%
+summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+hmgcs2_pseudo <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    ) + ggtitle("Hmgcs2") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='italic', size = 17), axis.text = element_text(size=12), panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) + ylab("Pseudobulk Expression") + xlab("") 
+
+
+#Ucp1 pseudobulk
+#Pseudobulk - Figure 5 pancel D
+data.df <- adipo@meta.data[, c("timpoint", "timpoint")]
+data.df["value"] <- adipo$RNA@data["Ucp1", ]
+data.df <- data.df %>% mutate(group = paste(timpoint, timpoint, sep=":"))
+#data.df <- data.df %>% filter(value > 0)
+data.df[data.df==0] <- 0.001
+#data.df.2 <- data.df %>% group_by(group) %>% summarise(sd=sem(value),value=mean(value))
+data.df.2 <- data.df %>% group_by(group) %>%
+summarise(sd=(sd(value)/sqrt(length((value)))),value=mean(value))
+#data.df.2 %>% summarise_each(funs(mean, sd, se=sd(.)/sqrt(n())), hp:drat) %>%slice(1:2)
+X <- str_split(data.df.2$'group', ":", 2, simplify=TRUE)
+
+data.df.2$'timpoint' <- X[, 1]
+data.df.2$'timpoint' <- X[, 2]
+
+data.df.2$timpoint <- factor(data.df.2$timpoint, levels = c("RT", "24hr", "48hr", "4day"))
+ucp1_pseudo <- ggplot(data.df.2, aes(fill=timpoint, y=value, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    ) + ggtitle("Ucp1") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='italic', size = 17), axis.text = element_text(size=12), panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) + ylab("Pseudobulk Expression") + xlab("") 
+
+library(ggpubr)
+figure <- ggarrange(hmgcs2_pseudo, ucp1_pseudo,
+                    ncol = 2, nrow = 1)
+figure
+
+
+
+
+
+
+hmgcs2_fold <- FoldChange(adipo, ident.1 = "RT", ident.2 = "4day", features = "Hmgcs2")
+ggplot(hmgcs2_fold, aes(fill=timpoint, x=timpoint)) + 
+    geom_bar(color="black", position="dodge", stat="identity") +
+    geom_errorbar(
+        aes(ymin=value, ymax=value+sd), width=.2,
+        position=position_dodge(.9)
+    )+ NoLegend() + ggtitle("Hmgcs2") + theme(
+    plot.title=element_text( hjust=0.5, vjust=0.5, face='bold'), axis.text = element_text(size=10)) + ylab("Pseudobulk Expression") + xlab("")
+
+```
+
+
+#Citations
+```{r}
+get_citations(adipo_cds)
+```
+

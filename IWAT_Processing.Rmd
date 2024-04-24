@@ -1,0 +1,1994 @@
+---
+title: "Iwat data processing"
+output: html_document
+date: "2023-10-16"
+---
+#Packages
+```{r}
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(R.utils)
+```
+
+#Import
+```{r}
+setwd("~/Desktop/Kim Lab/Bioinformatics")
+iwatcounts <- Read10X(data.dir = "iwat/")
+setwd("~/Desktop/Kim Lab/Bioinformatics/IWAT")
+iwatmeta <- read.table("metadata.tsv.gz", sep="\t")
+```
+
+#Create Object
+```{r}
+iwatobj = CreateSeuratObject(counts = iwatcounts)
+iwatobj <- AddMetaData(iwatobj, metadata = iwatmeta)
+rm(iwatcounts)
+rm(iwatmeta)
+```
+
+#Add percent.mt
+```{r}
+iwatobj[["percent.mt"]] <- PercentageFeatureSet(iwatobj, pattern = "^mt-")
+```
+
+#Filter
+```{r}
+iwatobj <- subset(iwatobj, subset = nFeature_RNA > 700 & percent.mt < 10)
+```
+
+#Normalize
+```{r}
+iwatobj <- NormalizeData(iwatobj, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+#Find Variable Features and Scale
+```{r}
+iwatobj <- FindVariableFeatures(iwatobj, selection.method = "vst", nfeatures = 2000)
+iwatobj <- ScaleData(iwatobj, features = rownames(iwatobj))
+```
+
+#Jackstraw PCA analysis
+```{r}
+iwatobj <- RunPCA(iwatobj, npcs = 50)
+iwatobj <- JackStraw(iwatobj, num.replicate = 100)
+iwatobj <- ScoreJackStraw(iwatobj, dims = 1:50)
+```
+
+#Find Neighbors and Clusters, dims are set to the number of sig. PCs
+```{r}
+iwatobj <- FindNeighbors(iwatobj, dims = 1:30)
+
+iwatobj <- FindClusters(iwatobj, resolution = 0.305)
+```
+
+#Run TSNE
+```{r}
+iwatobj <- RunTSNE(iwatobj, dims = 1:30)
+DimPlot(iwatobj, reduction = "tsne", pt.size = 0.001)
+```
+
+```{r}
+iwatobj.markers <- FindAllMarkers(iwatobj, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+iwatobj.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+write.table(iwatobj.markers, "iwatobj_markers.csv", sep = "\t")
+```
+
+#Run UMAP
+```{r}
+iwatobj <- RunUMAP(iwatobj, dims = 1:30)
+DimPlot(iwatobj, reduction = "umap", pt.size = 0.001)
+DimPlot(iwatobj, reduction = "umap", pt.size = 0.001, label = T, repel = T)
+
+DimPlot(iwatobj, label = TRUE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+```
+
+
+#Add Cell-IDs
+```{r}
+new.cluster.ids <- c("Vascular Endothelial Cells(VECs)", "Adipose Stem Cells 1(ASC1)", "Mature Adipocytes", "Vascular Smooth Muscle(VSM)", "Macrophages", "Vascular Endothelial Cells(VECs)", "Fibro-Inflammatory Progenitors(FIPs)", "Hematopoietic Stem Cells(HSCs)", "Adipose Stem Cells 2(ASC2)", "T Cells", "Nerve Cells", "Vascular Stem Cells(VSCs)", "Smooth Muscle Cells(SMCs)", "Schwann Cells")
+names(new.cluster.ids) <- levels(iwatobj)
+iwatobj <- RenameIdents(iwatobj, new.cluster.ids)
+iwatobj$seurat_clusters <- iwatobj@active.ident
+DimPlot(iwatobj, label = T)
+
+new.cluster.ids <- c("Vascular Endothelial Cells(VECs)", "Adipose Stem Cells 1(ASC1)", "Mature Adipocytes", "Vascular Smooth Muscle(VSM)", "Macrophages", "Fibro-Inflammatory Progenitors(FIPs)",
+    "Hematopoietic Stem Cells(HSCs)", "Adipose Stem Cells 2(ASC2)", "T Cells", "Nerve Cells", "Vascular Stem Cells(VSCs)", "Smooth Muscle Cells(SMCs)", "Schwann Cells")
+names(new.cluster.ids) <- levels(iwatobj)
+iwatobj <- RenameIdents(iwatobj, new.cluster.ids)
+iwatobj$seurat_clusters <- iwatobj@active.ident
+DimPlot(iwatobj, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+
+#Factor to order
+iwatobj$seurat_clusters <- factor(x = iwatobj$seurat_clusters, levels = c("Adipose Stem Cells 1(ASC1)", "Adipose Stem Cells 2(ASC2)", "Fibro-Inflammatory Progenitors(FIPs)", "Macrophages", "Mature Adipocytes", "T Cells", "Vascular Endothelial Cells(VECs)", "Vascular Stem Cells(VSCs)", "Vascular Smooth Muscle(VSM)", "Smooth Muscle Cells(SMCs)", "Hematopoietic Stem Cells(HSCs)", "Nerve Cells", "Schwann Cells")) # change the order of the factor levels
+Idents(iwatobj) <- iwatobj$seurat_clusters
+
+#DotPlot of all Clusters
+DotPlot(iwatobj, features = c("Pdgfra", "Zim1", "Hmgcs2", "Vit", "F3", "Apod", "Dpp4", "Fndc1", "Pi16", "Cd86", "Cd84", "Ly86", "Ppara", "Ppargc1a", "Ucp1", "Wnt4", "Gipc2", "Ttc6", "Nova2", "Notch4", "Shank3", "Mki67", "Top2a", "Knl1", "Slc4a8", "Notch3", "Adap2", "Col4a6", "Adamts18", "Fhod3", "Hbb-bs", "Hba-a2", "Hba-a1", "Kit", "Irx1", "Btn1a1", "Reln", "Ncam1", "Kcna1"), cols = c("gray", "blue"), scale = TRUE) + RotatedAxis()
+
+#DotPlot of 
+asc_obj <- subset(iwatobj, idents = c("Adipose Stem Cells 1(ASC1)", "Adipose Stem Cells 2(ASC2)", "Fibro-Inflammatory Progenitors(FIPs)", "Macrophages", "Mature Adipocytes"))
+
+#Rename for shortform
+new.cluster.ids <- c("ASC1", "ASC2", "FIPs", "Macrophages", "Mature Adipocytes")
+names(new.cluster.ids) <- levels(asc_obj)
+asc_obj <- RenameIdents(asc_obj, new.cluster.ids)
+asc_obj$seurat_clusters <- asc_obj@active.ident
+DotPlot(asc_obj, features = c("Pdgfra", "Zim1", "Hmgcs2", "Vit", "F3", "Apod", "Dpp4", "Fndc1", "Pi16", "Cd86", "Cd84", "Ly86", "Ppara", "Ppargc1a", "Ucp1", "Bdh1", "Oxct1", "Ffar2", "Hcar2", "Slc16a1", "Slc16a7", "Slc16a3", "Slc16a6", "Hmgcs1"), cols = c("gray", "blue"), scale = TRUE, scale.max = 30) + RotatedAxis()
+
+DotPlot(asc_obj, features = c("Pdgfra", "Zim1", "Hmgcs2", "Vit", "F3", "Apod", "Dpp4", "Fndc1", "Pi16", "Cd86", "Cd84", "Ly86", "Ppara", "Ppargc1a", "Ucp1", "Bdh1", "Ffar2", "Hcar2", "Slc16a1", "Slc16a6", "Hmgcs1"), cols = c("gray", "red"), scale = TRUE, scale.max = 30) + RotatedAxis()
+
+mat_obj <- subset(asc_obj, idents = c("Mature Adipocytes"))
+DotPlot(mat_obj, features = c("Ppara", "Ppargc1a", "Ucp1", "Bdh1", "Ffar2", "Hcar2", "Slc16a1", "Slc16a6", "Hmgcs1"), group.by = "timpoint", cols = c("gray", "red"), scale = TRUE, scale.max = 30) + RotatedAxis()
+
+#subsetting only ASC1+ASC2
+asc_obj <- subset(iwatobj, idents = c("Adipose Stem Cells 1(ASC1)", "Adipose Stem Cells 2(ASC2)"))
+```
+
+```{r}
+#Write the markers
+write.table(iwatobj.markers, "iwatobj_markers.csv", sep = "\t")
+```
+
+##Change the order of metadata
+```{r}
+asc_obj$timpoint <- factor(x = asc_obj$timpoint, levels = c("RT", "24hr", "48hr", "4day", "CL")) # change the order of the factor levels
+Idents(asc_obj) <- asc_obj$timpoint
+```
+
+```{r}
+#Here I seperate the whole IWATobj between RT, 24hr, 48hr, 4day, and RT, CL
+Idents(iwatobj)
+Idents(iwatobj) <- iwatobj$timpoint
+
+iwatobj_ce <- subset(iwatobj, idents = c("RT", "24hr", "48hr", "4day"))
+iwatobj_cl <- subset(iwatobj, idents = c("RT", "CL"))
+
+iwatobj_ce <- NormalizeData(iwatobj_ce)
+iwatobj_ce <- FindVariableFeatures(iwatobj_ce, selection.method = "vst")
+iwatobj_ce <- ScaleData(iwatobj_ce, features = rownames(iwatobj_ce))
+
+iwatobj_ce <- FindNeighbors(iwatobj_ce, dims = 1:29)
+iwatobj_ce <- FindClusters(iwatobj_ce, resolution = 0.3)
+
+iwatobj_ce <- RunUMAP(iwatobj_ce, dims = 1:29)
+DimPlot(iwatobj_ce, reduction = "umap", pt.size = 0.001)
+
+FeaturePlot(iwatobj_ce, "Kcna1")
+
+new.cluster.ids <- c("Vascular Endothelial Cells(VECs)", "Vascular Endothelial Cells(VECs)", "Adipose Stem Cells 1(ASC1)", "Adipocytes", "Macrophages", "Vascular Smooth Muscle Cells(VSMs)", "Adipose Stem Cells 3(ASC3)", "Hematopoietic Stem Cells(HSCs)", "Adipocytes", "Adipose Stem Cells 2(ASC2)", "T Cells", "Nerve Cells", "Smooth Muscle Cells(SMCs)", "Schwann Cells", "Vascular Stem Cells(VSCs)")
+
+iwatobj_ce$seurat_clusters <- factor(x = iwatobj_ce$seurat_clusters, levels = c("Adipose Stem Cells 1(ASC1)", "Adipose Stem Cells 2(ASC2)",  "Adipose Stem Cells 3(ASC3)", "Adipocytes", "Macrophages", "T Cells", "Vascular Endothelial Cells(VECs)", "Vascular Stem Cells(VSCs)", "Vascular Smooth Muscle Cells(VSMs)", "Smooth Muscle Cells(SMCs)", "Hematopoietic Stem Cells(HSCs)", "Nerve Cells", "Schwann Cells")) # change the order of the factor levels
+Idents(iwatobj_ce) <- iwatobj_ce$seurat_clusters
+
+names(new.cluster.ids) <- levels(iwatobj_ce)
+iwatobj_ce <- RenameIdents(iwatobj_ce, new.cluster.ids)
+iwatobj_ce$seurat_clusters <- iwatobj_ce@active.ident
+DimPlot(iwatobj_ce, reduction = "umap", label = FALSE) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+DimPlot(iwatobj_ce, reduction = "umap", group.by = "timpoint") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) + ggtitle("")
+
+#Change name back to fullform
+new.cluster.ids <- c("Adipose Stem Cells 1(ASC1)", "Adipose Stem Cells 2(ASC2)",  "Adipose Stem Cells 3(ASC3)", "Adipocytes", "Macrophages", "T Cells", "Vascular Endothelial Cells(VECs)", "Vascular Stem Cells(VSCs)", "Vascular Smooth Muscle Cells(VSMs)", "Smooth Muscle Cells(SMCs)", "Hematopoietic Stem Cells(HSCs)", "Nerve Cells", "Schwann Cells")
+names(new.cluster.ids) <- levels(iwatobj_ce)
+iwatobj_ce <- RenameIdents(iwatobj_ce, new.cluster.ids)
+iwatobj_ce$seurat_clusters <- iwatobj_ce@active.ident
+DimPlot(iwatobj_ce, reduction = "umap", pt.size = 0.001)
+
+
+#Cluster RT and CL cells
+
+iwatobj_cl <- NormalizeData(iwatobj_cl)
+iwatobj_cl <- FindVariableFeatures(iwatobj_cl, selection.method = "vst")
+iwatobj_cl <- ScaleData(iwatobj_cl, features = rownames(iwatobj_cl))
+
+iwatobj_cl <- FindNeighbors(iwatobj_cl, dims = 1:29)
+iwatobj_cl <- FindClusters(iwatobj_cl, resolution = 0.45)
+
+iwatobj_cl <- RunUMAP(iwatobj_cl, dims = 1:29)
+DimPlot(iwatobj_cl, reduction = "umap", pt.size = 0.001, label = T)
+DimPlot(iwatobj_cl, reduction = "umap", group.by = "timpoint")
+
+FeaturePlot(iwatobj_cl, "Kcna1")
+
+new.cluster.ids <- c("Adipose Stem Cells 1(ASC1)", "Vascular Endothelial Cells(VECs)", "Vascular Endothelial Cells(VECs)", "Vascular Endothelial Cells(VECs)", "Adipocytes", "Adipocytes", "Adipocytes", "Vascular Smooth Muscle Cells(VSMs)", "Macrophages", "Adipose Stem Cells 3(ASC3)", "Adipose Stem Cells 2(ASC2)", "Hematopoietic Stem Cells(HSCs)", "T Cells", "Nerve Cells", "Vascular Stem Cells(VSCs)", "Schwann Cells", "Smooth Muscle Cells(SMCs)")
+names(new.cluster.ids) <- levels(iwatobj_cl)
+iwatobj_cl <- RenameIdents(iwatobj_cl, new.cluster.ids)
+iwatobj_cl$seurat_clusters <- iwatobj_cl@active.ident
+DimPlot(iwatobj_cl, reduction = "umap", label = FALSE) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+DimPlot(iwatobj_cl, reduction = "umap", group.by = "timpoint") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) + ggtitle("")
+
+#Reordering
+iwatobj_cl$seurat_clusters <- factor(x = iwatobj_cl$seurat_clusters, levels = c("Adipose Stem Cells 1(ASC1)", "Adipose Stem Cells 2(ASC2)",  "Adipose Stem Cells 3(ASC3)", "Adipocytes", "Macrophages", "T Cells", "Vascular Endothelial Cells(VECs)", "Vascular Stem Cells(VSCs)", "Vascular Smooth Muscle Cells(VSMs)", "Smooth Muscle Cells(SMCs)", "Hematopoietic Stem Cells(HSCs)", "Nerve Cells", "Schwann Cells")) # change the order of the factor levels
+Idents(iwatobj_cl) <- iwatobj_cl$seurat_clusters
+DimPlot(iwatobj_cl, reduction = "umap", label = FALSE) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+
+#Finding markers of iwat ce vs iwat cl
+iwat_CE.markers <- FindAllMarkers(iwatobj_ce, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+iwat_CE.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+
+write.table(iwat_CE.markers, "IWAT_CE_markers.csv", sep = "\t")
+
+iwat_CL.markers <- FindAllMarkers(iwatobj_cl, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+iwat_CL.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+
+write.table(iwat_CL.markers, "IWAT_CL_markers.csv", sep = "\t")
+
+#Take top 3 logFC
+#IWAT - CE top 3 logFC per cluster
+
+#Renaming for shortforms
+new.cluster.ids <- c("ASC1", "ASC2", "ASC3", "Adipocytes", "Macrophages", "T Cells", "VECs", "VSCs", "VSMs", "SMCs", "HSCs", "Nerve Cells", "Schwann Cells")
+
+names(new.cluster.ids) <- levels(iwatobj_ce)
+iwatobj_ce <- RenameIdents(iwatobj_ce, new.cluster.ids)
+iwatobj_ce$seurat_clusters <- iwatobj_ce@active.ident
+DimPlot(iwatobj_ce, reduction = "umap", label = FALSE) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+
+top3logfc_iwat_ce <- c("Gm30075", "Slit2","Hc"
+,"Gria4" ,"Vit" ,"Tspan11"
+,"Smpd3" ,"Sema3c","Pi16" 
+,"Tenm4","Ppargc1b","Adra1a"
+,"Lilrb4a","Ms4a7","Cd84"
+,"Gm32014","Nrxn3","A830008E24Rik"
+,"Egfl7","Btnl9","Ushbp1"
+,"Mki67","Top2a","Cenpf"
+,"Meg3","Pdgfrb","Notch3"
+,"Runx1","Col7a1","Ctgf"
+,"Hbb-bs","Hba-a2","Hba-a1"
+,"Trps1","Igfbp5","Kit"
+,"Gm13403","Kcna1","Sap30bpos")
+
+knownmarkers_top3 <- c("Fap", "Lama2", "Pdgfra"
+, "F3", "Apod", "Cebpd"
+, "Pi16", "Dpp4", "Creb5"
+, "Lipe", "Plin1", "Ppargc1a"
+, "Clec10a", "Lyz2", "Cd163"
+, "Cd24a", "Gata3", "Cd164"
+, "Btnl9", "Ushbp1", "Pecam1"
+, "Cenpf", "Top2a", "Mki67"
+, "Notch3", "Pdgfrb", "Carmn"
+, "Myh11", "Acta2", "Tagln"
+#, "Kdr", "Kitl", "Flt1"
+, "Hba-a1", "Adgrg1", "Hba-a2"
+, "Map2", "Ntn1", "Sox9"
+, "Mpz", "Sox10", "Mbp")
+
+DotPlot(iwatobj_ce, features = top3logfc_iwat_ce, cols = c("lightgray", "blue")) + RotatedAxis()
+DotPlot(iwatobj_ce, features = knownmarkers_top3, cols = c("lightgray", "blue")) + RotatedAxis() + theme(axis.text.x = element_text(face = 'italic')) 
+
+DotPlot(iwatobj_cl, features = knownmarkers_top3, cols = c("lightgray", "blue")) + RotatedAxis() + theme(axis.text.x = element_text(face = 'italic')) 
+
+Idents(adipo) <- adipo$seurat_clusters
+DotPlot(adipo, features = c("Dpp4", "Ly6a", 
+"Btnl9", "Pecam1", 
+"Pdgfrb", "Nr4a1", 
+"Pdgfra", "Sox4", 
+"Cebpa", "Adipoq", 
+"Plin1", "Nr1d1", 
+"Nrg4", "Acaca", 
+"Ucp1", "Cidea"), cols = c("lightgray", "blue"))+ RotatedAxis() + theme(axis.text.x = element_text(face = 'italic')) 
+
+Idents(cl_adipo) <- cl_adipo$seurat_clusters
+DotPlot(cl_adipo, features = c("Dpp4", "Ly6a",
+"Pdgfrb", "Nr4a1", 
+"Pdgfra", "Sox4", 
+"Cebpa", "Adipoq", 
+"Plin1", "Nr1d1", 
+"Nrg4", "Acaca", 
+"Ucp1", "Cidea"), cols = c("lightgray", "blue"))+ RotatedAxis() + theme(axis.text.x = element_text(face = 'italic')) 
+
+#Renaming to shortform - CL object
+
+new.cluster.ids <- c("ASC1", "ASC2", "ASC3", "Adipocytes", "Macrophages", "T Cells", "VECs", "VSCs", "VSMs", "SMCs", "HSCs", "Nerve Cells", "Schwann Cells")
+
+names(new.cluster.ids) <- levels(iwatobj_cl)
+iwatobj_cl <- RenameIdents(iwatobj_cl, new.cluster.ids)
+iwatobj_cl$seurat_clusters <- iwatobj_cl@active.ident
+DimPlot(iwatobj_cl, reduction = "umap", label = FALSE) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+top3logfc_iwat_CL <- c("Gm30075", "Slit2","Gm8113"
+,"Gria4" ,"Vit" ,"Tspan11"
+,"Smpd3" ,"Tmem100","Sema3c" 
+,"Ppara","Adra1a","Tenm4"
+,"Pou2f2","Ms4a7","Ciita"
+,"Muc16","Nrxn3","A830008E24Rik"
+,"Nova2","Ccdc85a","Mcf2l"
+,"Ankle1","Mis18bp1","Mki67"
+,"Gipr","Sgip1","Sox11"
+,"4631405K08Rik","Kctd4","Krt5"
+,"Hba-a1","Hba-a2","Hbb-bt"
+,"Clic6","Atp6v1b1","Fut9"
+,"Cnksr2","Gm13403","Sap30bpos")
+DotPlot(iwatobj_cl, features = top3logfc_iwat_ce, cols = c("lightgray", "blue")) + RotatedAxis()
+
+#FeaturePlots - CE IWAT
+
+CE_Ly6a_plot <- FeaturePlot(iwatobj_ce, features = c("Ly6a"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+CE_adipoq_plot <- FeaturePlot(iwatobj_ce, features = c("Adipoq"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+CE_Ucp1_plot <- FeaturePlot(iwatobj_ce, features = c("Ucp1"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+CE_Hmgcs2_plot <- FeaturePlot(iwatobj_ce, features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+library(ggpubr)
+CE_adipoq_plot + CE_plin1_plot + CE_Ucp1_plot + CE_Hmgcs2_plot
+CE_featureplots <- ggarrange(CE_adipoq_plot, CE_plin1_plot, CE_Ucp1_plot, CE_Hmgcs2_plot,
+                    ncol = 2, nrow = 2)
+CE_featureplots
+
+#FeaturePlots - CL IWAT
+
+CL_plin1_plot <- FeaturePlot(iwatobj_cl, features = c("Plin1"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+CL_adipoq_plot <- FeaturePlot(iwatobj_cl, features = c("Adipoq"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+CL_Ucp1_plot <- FeaturePlot(iwatobj_cl, features = c("Ucp1"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+CL_Hmgcs2_plot <- FeaturePlot(iwatobj_cl, features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+library(ggpubr)
+CL_adipoq_plot + CL_plin1_plot + CL_Ucp1_plot + CL_Hmgcs2_plot
+CL_featureplots <- ggarrange(CE_adipoq_plot, CE_plin1_plot, CE_Ucp1_plot, CE_Hmgcs2_plot,
+                    ncol = 2, nrow = 2)
+CL_featureplots
+
+CL_featureplots <- ggarrange(CL_Ucp1_plot, CL_Hmgcs2_plot,
+                    ncol = 2, nrow = 1)
+CL_featureplots
+
+
+#VlnPlot
+Idents(iwatobj_ce) <- iwatobj_ce$timpoint
+VlnPlot(iwatobj_ce, features = c("Adipoq", "Plin1", "Ucp1", "Hmgcs2"), ncol = 4)
+
+```
+
+
+```{r}
+#Proportion of cells across time
+library(speckle)
+library(limma)
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+
+# Plot cell type proportions
+iwatobj_ce$timpoint <- factor(x = iwatobj_ce$timpoint, levels = c("RT", "24hr", "48hr", "4day")) # change the order of the factor levels
+Idents(iwatobj_ce) <- iwatobj_ce$timpoint
+
+
+props <- getTransformedProps(iwatobj_ce$seurat_clusters, iwatobj_ce$timpoint, transform="logit")
+barplot(props$Proportions, col = (hue_pal()(12)),legend=TRUE, 
+        ylab="Proportions", args.legend = list(x = "topright", bty = "n", inset=c(+0.1, 0)), xlim = c(0,8))
+
+
+iwatobj_cl$timpoint <- factor(x = iwatobj_cl$timpoint, levels = c("RT", "CL")) # change the order of the factor levels
+Idents(iwatobj_cl) <- iwatobj_cl$timpoint
+
+props <- getTransformedProps(iwatobj_cl$seurat_clusters, iwatobj_cl$timpoint, transform="logit")
+barplot(props$Proportions, col = (hue_pal()(12)),legend=TRUE, 
+        ylab="Proportions", args.legend = list(x = "topright", bty = "n", inset=c(+0.3, 0)), xlim = c(0,8))
+
+
+```
+
+
+
+
+```{r}
+asc_obj <- FindNeighbors(asc_obj, dims = 1:15)
+asc_obj <- FindClusters(asc_obj, resolution = 0.20)
+
+asc_obj <- RunUMAP(asc_obj, dims = 1:15)
+DimPlot(asc_obj, reduction = "umap")
+```
+
+#Cell Cycle Scoring
+```{r}
+#Load known cell-cycle genes
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+
+#Initialize Object
+asc_obj <- NormalizeData(asc_obj)
+asc_obj <- FindVariableFeatures(asc_obj, selection.method = "vst")
+asc_obj <- ScaleData(asc_obj, features = rownames(asc_obj))
+
+asc_obj <- CellCycleScoring(asc_obj, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+
+#Run Plot
+asc_obj <- RunPCA(asc_obj, features = c(s.genes, g2m.genes))
+DimPlot(asc_obj)
+
+```
+
+#DotPlot
+```{r}
+DotPlot(asc_obj, features = c("Hmgcs2", "Pdgfrb", "Cd81"), cols = c("red", "blue", "yellow", "green", "purple"))
+
+DotPlot(asc_obj, features = c("Hmgcs2"), cols = c("lightgray", "red"))
+```
+
+#Renaming new ASC ids
+```{r}
+asc_obj_new_ids <- c("White Adipocyte Progenitors(WAPs)", "Beige Adipocyte Progenitors(BAPs)", "Adipose Regulatory Cells(Aregs)", "Fibro-Inflammatory Progenitors(FIPs)", "Endothelial-like Adipose Stem Cells(E-ASC)")
+asc_obj_new_ids <- c("WAPs", "BAPs", "Aregs", "FIPs", "E-ASC")
+names(asc_obj_new_ids) <- levels(asc_obj)
+asc_obj <- RenameIdents (asc_obj, asc_obj_new_ids)
+DotPlot(asc_obj, features = c("Fosb", "Lox", "F3", "Fap", "Cdh5", "Hmgcs2"), cols = c("gray", "red"), scale = TRUE)
+```
+
+```{r}
+DotPlot(rt, features = c("Hmgcs2"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(twentyfour, features = c("Hmgcs2"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(fourtyeight, features = c("Hmgcs2"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(four_day, features = c("Hmgcs2"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(cl, features = c("Hmgcs2"), cols = c("gray", "red"), scale = TRUE, scale.max = 20)
+```
+
+```{r}
+DotPlot(rt, features = c("Lox"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(twentyfour, features = c("Lox"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(fourtyeight, features = c("Lox"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(four_day, features = c("Lox"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(cl, features = c("Lox"), cols = c("gray", "red"), scale = TRUE, scale.max = 20)
+```
+
+```{r}
+DotPlot(rt, features = c("Cebpb"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(twentyfour, features = c("Cebpb"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(fourtyeight, features = c("Cebpb"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(four_day, features = c("Cebpb"), cols = c("gray", "red"), scale = TRUE, scale.max = 20) + NoLegend() + DotPlot(cl, features = c("Cebpb"), cols = c("gray", "red"), scale = TRUE, scale.max = 20)
+```
+
+#Subsection BAPs
+```{r}
+bap_obj <- subset(asc_obj, idents = "BAPs")
+
+bap_obj <- NormalizeData(bap_obj)
+bap_obj <- FindVariableFeatures(bap_obj, selection.method = "vst")
+bap_obj <- ScaleData(bap_obj, features = rownames(bap_obj))
+
+bap_obj <- FindNeighbors(bap_obj, dims = 1:20)
+bap_obj <- FindClusters(bap_obj, resolution = 0.20)
+
+bap_obj <- RunUMAP(bap_obj, dims = 1:20)
+DimPlot(bap_obj, reduction = "umap", pt.size = 0.001)
+
+
+#Find Markers
+bap.markers <- FindAllMarkers(bap_obj, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+bap.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+
+write.table(bap.markers, "bap.markers.csv", sep = "\t")
+
+
+```
+
+#Subset ASC's
+```{r}
+asc_obj_new_ids <- c("White Adipocyte Progenitors(WAPs)", "Beige Adipocyte Progenitors(BAPs)", "Adipose Regulatory Cells(Aregs)", "Endothelial-like Adipose Stem Cells(E-ASC)")
+asc_obj_new_ids <- c("WAPs", "BAPs", "Aregs", "E-ASC")
+names(asc_obj_new_ids) <- levels(asc_obj)
+asc_obj <- RenameIdents(asc_obj, asc_obj_new_ids)
+asc_obj$seurat_clusters <- asc_obj@active.ident
+
+DimPlot(adipo, cells.highlight = WhichCells(adipo, idents = c("Aregs")), cols.highlight = c("blue"))
+
+asc_obj.markers <- FindAllMarkers(asc_obj, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+asc_obj.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+write.table(asc_obj.markers, "asc_obj.csv", sep = "\t")
+
+#Rename for shortform
+new.cluster.ids <- c("ASC1", "ASC2")
+names(new.cluster.ids) <- levels(adipo)
+adipo <- RenameIdents(adipo, new.cluster.ids)
+asc_obj$seurat_clusters <- adipo@active.ident
+
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo))
+adipo <- RunPCA(adipo, npcs = 50)
+adipo <- FindNeighbors(adipo, dims = 1:20)
+adipo <- FindClusters(adipo, resolution = 0.20)
+
+adipo <- RunUMAP(adipo, dims = 1:20)
+DimPlot(adipo, reduction = "umap")
+
+adipo <- RunTSNE(adipo, dims = 1:20)
+DimPlot(adipo, reduction = "tsne", pt.size = 0.001)
+
+adipo_newid <- c("APCs", "Mature Adipocytes")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+
+
+```
+
+#Subsetting APCs and Mature Adipocytes for monocole object
+```{r}
+setwd("/Users/colestocker/Desktop/Kim Lab/Bioinformatics/IWAT")
+adipo <- subset(iwatobj, idents = c("ASC1", "ASC2", "Beige Adipocytes"))
+
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo))
+adipo <- RunPCA(adipo, npcs = 50)
+adipo <- FindNeighbors(adipo, dims = 1:18)
+adipo <- FindClusters(adipo, resolution = 0.4)
+
+adipo <- RunUMAP(adipo, dims = 1:18)
+DimPlot(adipo, reduction = "umap")
+
+adipo_newid <- c("WAPs", "BAPs", "Mature Adipocyte", "Mature Adipocyte", "Mature Adipocyte", "Aregs", "Mature Adipocyte", "Mature Adipocyte", "Mature Adipocyte", "Mature Adipocyte", "E-ASC")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+
+adipo@active.ident <- factor(x = adipo@active.ident, levels = c("WAPs", "BAPs", "Aregs", "E-ASC", "Mature Adipocyte")) # change the order of the factor levels
+Idents(adipo) <- adipo@active.ident
+adipo$seurat_clusters <- adipo@active.ident
+
+DotPlot(adipo, features = c("Egr1", "Lox", "F3", "Cdh5", "Hmgcs2"), cols = c("lightgray", "red"))
+
+#Subset to only look at
+
+adipo.markers <- FindAllMarkers(adipo, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+adipo.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+
+write.table(adipo.markers, "adipo.markers.csv", sep = "\t")
+
+```
+
+#Removing Aregs for monocle import
+```{r}
+adipo <- subset(adipo, idents = c("WAPs", "BAPs", "E-ASC", "Mature Adipocyte"))
+
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo))
+adipo <- RunPCA(adipo, npcs = 50)
+ElbowPlot(adipo, n = 50)
+
+adipo <- FindNeighbors(adipo, dims = 1:18)
+adipo <- FindClusters(adipo, resolution = 0.4)
+
+adipo <- RunUMAP(adipo, dims = 1:18)
+DimPlot(adipo, reduction = "umap")
+
+
+#adipo_newid <- c("0", "1", "2", "3", "4")
+#names(adipo_newid) <- levels(adipo)
+#adipo <- RenameIdents (adipo, adipo_newid)
+
+#adipo_newid <- c("WAPs", "BAPs", "Aregs", "E-ASC", "Mature Adipocytes")
+#names(adipo_newid) <- levels(adipo)
+#adipo <- RenameIdents (adipo, adipo_newid)
+
+#adipo cluster ID
+DotPlot(adipo, features = c("Tnfaip6", "Prtg", "Gm8113", "Plekha6", "Lox", "Cyp1b1", "Dnm3os", "Sox4", "Vit", "Gria4", "Tspan11", "Gdf10", "Gm12002", "Nova2", "Rin3", "Pcdh17", "Tenm4", "Adra1a", "Gm3289", "Ppara"), cols = c("gray", "red"), scale = TRUE, scale.max = 30) + RotatedAxis()
+
+#wap+bap subcluster
+wapbap <- subset(adipo, ident = c("0", "1"))
+
+#adipo cluster 0 + 1ID
+DotPlot(wapbap, features = c("Egr1", "Bhlhe40", "Nr4a1", "Jun", "Pdgfra", "Pdgfrb", "Cebpb", "Bmp4", "Cd81", "Sox4", "Nfia"), cols = c("gray", "red"), scale = TRUE, scale.max = 25) + RotatedAxis()
+
+#adipo cluster 2 ID
+FeaturePlot(adipo, features = c("F3", "Gdf10", "C2", "Mgp"))
+DotPlot(adipo, features = c("F3", "Gdf10", "C2", "Mgp"), cols = c("gray", "red"), scale = TRUE, scale.max = 25) + RotatedAxis()
+
+#adipo cluster 3 ID
+FeaturePlot(adipo, features = c("Btnl9", "Kdr", "Pecam1", "Ushbp1"))
+DotPlot(adipo, features = c("Btnl9", "Kdr", "Pecam1", "Ushbp1"), cols = c("gray", "red"), scale = TRUE) + RotatedAxis()
+
+#Add IDs
+adipo_newid <- c("WAPs", "BAPs", "Aregs", "E-ASC", "Mature Adipocytes")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+
+adipo_newid <- c("WAPs", "BAPs", "Mature Adipocyte", "Mature Adipocyte", "Mature Adipocyte", "Mature Adipocyte", "Mature Adipocyte", "Mature Adipocyte", "Mature Adipocyte", "E-ASC")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+
+DimPlot(adipo, reduction = "umap")
+FeaturePlot(adipo, features = c("Pecam1", "Btnl9", "Kdr", "Hmgcs2"))
+
+DimPlot(adipo, cells.highlight = WhichCells(adipo, idents = c("E-ASC")), cols.highlight = c("blue"))
+
+adipo@active.ident <- factor(x = adipo@active.ident, levels = c("WAPs", "BAPs", "E-ASC", "Mature Adipocyte")) # change the order of the factor levels
+Idents(adipo) <- adipo@active.ident
+
+DotPlot(adipo, features = c("Egr1", "Lox", "Cdh5", "Hmgcs2"), cols = c("lightgray", "red"))
+```
+
+
+```{r}
+
+```
+
+
+#Retrying ASC and Mature Adipocyte subsetting to get rid of FIP cluster as its only in CL and looks to be similar to WAPs.
+#These conditiosn remove extra FIP cluster and incorporate it into the WAP cluster.
+```{r}
+Idents(adipo) <- adipo$timpoint
+adipo <- subset(adipo, idents = c("RT", "24hr", "48hr", "4day"))
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo))
+adipo <- RunPCA(adipo, npcs = 50)
+
+adipo <- FindNeighbors(adipo, dims = 1:20)
+adipo <- FindClusters(adipo, resolution = 0.4)
+
+adipo <- RunUMAP(adipo, dims = 1:20)
+DimPlot(adipo, reduction = "umap")
+
+
+DimPlot(adipo, group.by = "timpoint")
+FeaturePlot(adipo, features = c("Hmgcs2", "Ucp1", "Egr1", "Lox", "Klf4"))
+
+VlnPlot(adipo, features = c("Hmgcs2", "Ucp1", "Egr1", "Lox", "Klf4"))
+
+
+adipo@active.ident <- factor(x = adipo@active.ident, levels = c("WAPs", "BAPs", "Mature Adipocyte", "Mature White Adipocyte", "Mature Thermogenic Adipocyte")) # change the order of the factor levels
+Idents(adipo) <- adipo@active.ident
+
+
+Idents(adipo) <- adipo$timpoint
+adipo@active.ident <- factor(x = adipo@active.ident, levels = c("RT", "24hr", "48hr", "4day")) # change the order of the factor levels
+Idents(adipo) <- adipo@active.ident
+adipo$timpoint <- adipo@active.ident
+
+DimPlot(adipo, group.by = "timpoint")
+FeaturePlot(adipo, features = c("Hmgcs2", "Ucp1", "Egr1", "Lox", "Klf4"))
+
+apc <- subset(adipo, idents = c("BAPs", "WAPs"))
+
+FeaturePlot(apc, features = c("Egr1", "Lox"), split.by = "seurat_clusters")
+
+DotPlot(apc, features = c("Egr1", "Bhlhe40", "Nr4a1", "Jun", "Cebpb", "Pdgfrb", "Pdgfra", "Bmp4", "Cd81", "Sox4", "Nfia"), scale.max = 25) + RotatedAxis()
+
+#Renaming Clusters
+adipo_newid <- c("BAPs", "WAPs", "Mature Adipocyte", "Mature White Adipocyte", "Mature Adipocyte", "Mature Thermogenic Adipocyte")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+
+adipo$seurat_clusters <- Idents(adipo)
+```
+
+#Now im going to try this same no CL adipo object but also regress out percent.mt
+```{r}
+adipo <- subset(adipo, idents = c("RT", "24hr", "48hr", "4day"))
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo), vars.to.regress = "percent.mt")
+adipo <- RunPCA(adipo, npcs = 50)
+
+adipo <- FindNeighbors(adipo, dims = 1:15)
+adipo <- FindClusters(adipo, resolution = 0.3)
+
+adipo <- RunUMAP(adipo, dims = 1:15)
+DimPlot(adipo, reduction = "umap")
+
+DimPlot(adipo, group.by = "timpoint")
+FeaturePlot(adipo, features = c("Hmgcs2", "Ucp1", "Egr1", "Lox", "Klf4"))
+
+adipo_newid <- c("BAPs", "WAPs", "Mature White Adipocyte", "Mature Adipocyte", "Mature Adipocyte", "Mature Thermogenic Adipocyte")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+
+adipo$seurat_clusters <- Idents(adipo)
+
+#This worked really well to connect APCs to Mature Adipocytes
+#bap_adipo <- subset(adipo, idents = c("BAPs", "Mature Adipocyte", "Mature White Adipocyte", #"Mature Thermogenic Adipocyte"))
+
+#wap_adipo <- subset(adipo, idents = c("WAPs", "Mature Adipocyte", "Mature White Adipocyte", #"Mature Thermogenic Adipocyte"))
+
+#Subset APCs to highlight differences
+apc <- subset(adipo, idents = c("BAPs", "WAPs"))
+
+DotPlot(apc, features = c("Egr1", "Bhlhe40", "Nr4a1", "Jun", "Cebpb", "Pdgfrb", "Pdgfra", "Bmp4", "Cd81", "Sox4", "Nfia"), scale.max = 25) + RotatedAxis()
+
+new.adipo.markers <- FindAllMarkers(adipo, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+new.adipo.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+write.table(new.adipo.markers, "new_adipo_markers.csv", sep = "\t")
+
+
+#refactor levels
+adipo$seurat_clusters <- factor(x = adipo$seurat_clusters, levels = c("WAPs", "BAPs", "Mature Adipocyte", "Mature White Adipocyte", "Mature Thermogenic Adipocyte"))
+Idents(adipo) <- adipo$seurat_clusters
+
+#Top 6 by logFC for each cluster
+DotPlot(adipo, features = c("Has1", "Tnfaip6", "Nr4a1", "Fgl2", "Fosb", "Klf4","Cyp1b1", "Apod", "Timp2", "Lox", "Dnm3os", "Igfbp6", "Pmvk", "Sorbs1", "Retn", "Acaca", "Acsl1", "Plcb1", "Nnat", "Gas6", "Rasd1", "Hp", "Plppr3", "Chst1", "Lgr6", "Perm1", "Slc27a2", "Ppara", "Acot11", "Cidea"), scale.max = 50) + RotatedAxis()
+
+#Dotplot of known markers for thesis figure
+DotPlot(adipo, features = c("Dpp4", "Ly6a", 
+"Btnl9", "Pecam1", 
+"Pdgfrb", "Nr4a1", 
+"Pdgfra", "Sox4", 
+"Cebpa", "Adipoq", 
+"Plin1", "Nr1d1", 
+"Nrg4", "Acaca", 
+"Ucp1", "Cidea"))+ RotatedAxis() + theme(axis.text.x = element_text(face = 'italic')) 
+
+DotPlot(adipo, features = c("Dpp4", "Ly6a", 
+"Btnl9", "Pecam1", 
+"Pdgfrb", "Nr4a1", 
+"Pdgfra", "Sox4", 
+"Cebpa", "Adipoq", 
+"Plin1", "Nr1d1", 
+"Nrg4", "Acaca", 
+"Ucp1", "Cidea"))+ RotatedAxis()
+
+#FeaturePlots for poster
+
+CE_Dpp4_plot <- FeaturePlot(adipo, features = c("Dpp4"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) 
+
+CE_Cebpd_plot <- FeaturePlot(adipo, features = c("Cebpd"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) 
+
+CE_pparg_plot <- FeaturePlot(adipo, features = c("Pparg"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic'))
+
+CE_Adipoq_plot <- FeaturePlot(adipo, features = c("Adipoq"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) 
+
+CE_Ucp1_plot <- FeaturePlot(adipo, features = c("Ucp1"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) 
+
+CE_Hmgcs2_plot <- FeaturePlot(adipo, features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) 
+
+FeaturePlot(adipo, features = c("Dpp4", "Ly6a","Pdgfra", "Cebpd", "Cebpa", "Adipoq", "Ucp1", "Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all", ncol = 8) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) + NoLegend()
+
+#Backwards plotting so can be rotated 180
+FeaturePlot(adipo, features = c("Hmgcs2", "Ucp1","Adipoq", "Cebpa", "Cebpd", "Pdgfra", "Ly6a", "Dpp4"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all", ncol = 8) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) + NoLegend()
+
+#Figure 1 panel c
+FeaturePlot(adipo, features = c("Ucp1", "Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all", ncol = 2) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) + NoLegend()
+
+#Plotting for figure 1 panel C - titles and legend
+FeaturePlot(adipo, features = c("Hmgcs2", "Ucp1"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all", ncol = 2) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) 
+
+
+#Draft 2 Hmgcs2
+FeaturePlot(adipo, features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all", ncol = 1) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) + NoLegend()
+FeaturePlot(adipo, features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all", ncol = 1) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) 
+
+
+
+vln_df1 = data.frame(Hmgcs2 = adipo[["RNA"]]@data["Hmgcs2",], Timepoint = adipo$timpoint)
+plot1 <- ggplot(vln_df1, aes(x = Timepoint, y = Hmgcs2)) + geom_violin(aes(fill = Timepoint), adjust = 1, trim=TRUE, scale = "width") + geom_jitter(size = 0.5) + theme_bw() + ggtitle("WAPs") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5))
+
+library(ggpubr)
+CE_featureplots <- ggarrange(CE_Dpp4_plot, CE_Cebpd_plot, CE_pparg_plot, CE_Adipoq_plot, CE_Ucp1_plot, CE_Hmgcs2_plot,
+                    ncol = 6, nrow = 1)
+CE_featureplots
+
+CE_featureplots <- ggarrange(CE_Hmgcs2_plot, CE_Ucp1_plot, CE_Adipoq_plot, CE_Cebpa_plot, CE_Cebpd_plot, CE_Hmgcs2_plot,
+                    ncol = 6, nrow = 1)
+CE_featureplots
+
+
+```
+
+
+
+#Rename again
+```{r}
+#Renaming new ASC ids
+
+asc_obj_new_ids <- c("WAPs", "BAPs", "Aregs", "E-ASC")
+names(asc_obj_new_ids) <- levels(asc_obj)
+asc_obj <- RenameIdents (asc_obj, asc_obj_new_ids)
+DotPlot(asc_obj, features = c("Fosb", "Lox", "F3", "Fap", "Cdh5", "Hmgcs2"), cols = c("gray", "red"), scale = TRUE)
+```
+
+
+#Subset WAPs, res = 0.1, dims = 20 gives 1 cluster; will redo later after state is determined
+```{r}
+wap_obj <- subset(asc_obj, idents = "WAPs")
+
+wap_obj <- NormalizeData(wap_obj)
+wap_obj <- FindVariableFeatures(wap_obj, selection.method = "vst")
+wap_obj <- ScaleData(wap_obj, features = rownames(wap_obj))
+
+wap_obj <- FindNeighbors(wap_obj, dims = 1:20)
+wap_obj <- FindClusters(wap_obj, resolution = 0.10)
+
+wap_obj <- RunUMAP(wap_obj, dims = 1:20)
+DimPlot(wap_obj, reduction = "umap", pt.size = 0.001)
+#These arent many cells, so I want to check for Cell Cycle again:
+
+#Load known cell-cycle genes
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+
+wap_obj <- NormalizeData(wap_obj)
+wap_obj <- FindVariableFeatures(wap_obj, selection.method = "vst")
+wap_obj <- ScaleData(wap_obj, features = rownames(wap_obj))
+
+wap_obj <- CellCycleScoring(wap_obj, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+
+#Run Plot
+wap_obj <- RunPCA(wap_obj, features = c(s.genes, g2m.genes))
+DimPlot(wap_obj)
+
+```
+#WAP run UMAP
+```{r}
+wap_obj <- FindNeighbors(wap_obj, dims = 1:20)
+wap_obj <- FindClusters(wap_obj, resolution = 0.10)
+
+wap_obj <- RunUMAP(wap_obj, dims = 1:20)
+DimPlot(wap_obj, reduction = "umap", pt.size = 0.001)
+
+```
+
+#Now Re-doing BAP subsection
+```{r}
+bap_obj <- subset(asc_obj, idents = "BAPs")
+
+bap_obj <- NormalizeData(bap_obj)
+bap_obj <- FindVariableFeatures(bap_obj, selection.method = "vst")
+bap_obj <- ScaleData(bap_obj, features = rownames(bap_obj))
+
+bap_obj <- FindNeighbors(bap_obj, dims = 1:20)
+bap_obj <- FindClusters(bap_obj, resolution = 0.10)
+
+bap_obj <- RunUMAP(bap_obj, dims = 1:20)
+DimPlot(bap_obj, reduction = "umap")
+
+bap.markers <- FindAllMarkers(bap_obj, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+bap.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+write.table(bap.markers, "bap_markers.csv", sep = "\t")
+```
+
+##CL tends to show a unique response, and differs significantly from the pattern observed from RT to 4day CE. Therefore we try removing CL cells in subcluster and see how this changes our results.
+
+#Retrying ASC subsetting to get rid of FIP cluster as its only in CL and looks to be similar to WAPs.
+#These conditiosn remove extra FIP cluster and incorporate it into the WAP cluster.
+```{r}
+asc_obj <- subset(adipo, idents = c("ASC1", "ASC2"))
+asc_obj <- NormalizeData(asc_obj)
+asc_obj <- FindVariableFeatures(asc_obj, selection.method = "vst")
+asc_obj <- ScaleData(asc_obj, features = rownames(asc_obj))
+
+asc_obj <- FindNeighbors(asc_obj, dims = 1:20)
+asc_obj <- FindClusters(asc_obj, resolution = 0.20)
+
+asc_obj <- RunUMAP(asc_obj, dims = 1:20)
+DimPlot(asc_obj, reduction = "umap")
+
+```
+
+
+#Proportion of cells using speckle/propellor package
+```{r}
+library(devtools)
+devtools::install_github("Oshlack/speckle")
+library(speckle)
+library(limma)
+library(ggplot2)
+library(RColorBrewer)
+
+
+#Factor and reorder
+adipo$timpoint <- factor(x = adipo$timpoint, levels = c("RT", "24hr", "48hr", "4day", "CL")) # change the order of the factor levels
+Idents(adipo) <- adipo$timpoint
+iwatobj$seurat_clusters <- iwatobj@active.ident
+
+adipo$seurat_clusters <- factor(x = adipo$seurat_clusters, levels = c("WAPs", "BAPs", "Aregs", "E-ASC", "Mature Adipocyte")) # change the order of the factor levels
+Idents(adipo) <- adipo$seurat_clusters
+
+propeller(clusters = adipo$seurat_clusters, sample = adipo$timpoint, group = adipo$seurat_clusters)
+
+# Plot cell type proportions
+plotCellTypeProps(clusters=adipo$seurat_clusters, sample=adipo$timpoint)
+
+props <- getTransformedProps(adipo$seurat_clusters, adipo$timpoint, transform="logit")
+barplot(props$Proportions, col = brewer.pal(5, "Paired"),legend=TRUE, 
+        ylab="Proportions", args.legend = list(x = "topright", bty = "n", inset=c(+0.1, 0)), xlim = c(0,8))
+
+
+#refactor time
+iwatobj$timpoint <- factor(x = iwatobj$timpoint, levels = c("RT", "24hr", "48hr", "4day", "CL")) # change the order of the factor levels
+Idents(iwatobj) <- iwatobj$timpoint
+iwatobj$timpoint <- iwatobj@active.ident
+
+props <- getTransformedProps(iwatobj$seurat_clusters, iwatobj$timpoint, transform="logit")
+barplot(props$Proportions, col = brewer.pal(5, "Paired"),legend=TRUE, 
+        ylab="Proportions", args.legend = list(x = "topright", bty = "n", inset=c(-0.2, 0)), xlim = c(0,18))
+
+```
+
+
+
+
+
+
+
+#BAP only
+#Monocle Package
+#Importing Seurat object to monocle
+```{r}
+library(monocle)
+
+#Direct import of Seurat objects doesnt work with this version, so it is converted back to dataframes and imported directly.
+data <- as(as.matrix(bap_obj@assays$RNA@data), 'sparseMatrix')
+
+pd <- new('AnnotatedDataFrame', data = bap_obj@meta.data)
+
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+
+#Construct monocle cds
+mon_bap <- newCellDataSet(data,
+                         phenoData = pd,
+                         featureData = fd,
+                         lowerDetectionLimit = 0.5,
+                         expressionFamily = negbinomial.size())
+
+#precalculate
+mon_bap <- estimateSizeFactors(mon_bap)
+mon_bap <- estimateDispersions(mon_bap)
+
+#detect genes at min expression of 0.1 and >= 10 cells expressing the gene
+mon_bap <- detectGenes(mon_bap, min_expr = 0.1)
+print(head(fData(mon_bap)))
+expressed_genes <- row.names(subset(fData(mon_bap),
+    num_cells_expressed >= 10))
+
+#Add cell identity
+Pdgfrb_id <- row.names(subset(fData(mon_bap), gene_short_name == "Pdgfrb"))
+cth <- newCellTypeHierarchy()
+cth <- addCellType(cth, "BAPs", classify_func =
+    function(x) { x[Pdgfrb_id,] >= 1 })
+
+mon_bap <- classifyCells(mon_bap, cth, 0.1)
+table(pData(mon_bap)$CellType)
+
+#Clustering cells with marker genes
+marker_diff <- markerDiffTable(mon_bap[expressed_genes,], cth,cores = 1)
+
+#unsupervised clustering
+disp_table <- dispersionTable(mon_bap)
+unsup_clustering_genes <- subset(disp_table, mean_expression >= 0.1)
+mon_bap <- setOrderingFilter(mon_bap, unsup_clustering_genes$gene_id)
+plot_ordering_genes(mon_bap)
+
+mon_bap <- reduceDimension(mon_bap, max_components = 2, num_dim = 3,
+  norm_method = 'log',
+  reduction_method = 'tSNE',
+  residualModelFormulaStr = "~timpoint + num_genes_expressed",
+  verbose = T)
+mon_bap <- clusterCells(mon_bap, num_clusters = 2)
+plot_cell_clusters(mon_bap, 1, 2, color = "CellType")
+
+
+
+mon_bap <- clusterCells(mon_bap, num_clusters = 1)
+plot_cell_clusters(mon_bap, 1, color = "timpoint")
+
+```
+
+
+#Unsupervised Pseudotime
+```{r}
+diff_test_res <- differentialGeneTest(mon_bap[expressed_genes,],
+              fullModelFormulaStr = "~timpoint")
+ordering_genes <- row.names (subset(diff_test_res, qval < 0.01))
+
+mon_bap <- setOrderingFilter(mon_bap, ordering_genes)
+plot_ordering_genes(mon_bap)
+
+mon_bap <- setOrderingFilter(mon_bap, ordering_genes)
+plot_ordering_genes(mon_bap)
+
+#Reduce dimensionality
+mon_bap <- reduceDimension(mon_bap, max_components = 2,
+    method = 'DDRTree')
+
+```
+
+##Plotting pseudotime + trajectory
+```{r}
+#order cells along trajectory
+mon_bap <- orderCells(mon_bap)
+plot_cell_trajectory(mon_bap, color_by = "Hours")
+
+plot_cell_trajectory(mon_bap, color_by = "State") +
+    facet_wrap(~State, nrow = 1)
+```
+
+##Checking gene expression across trajectory
+```{r}
+blast_genes <- row.names(subset(fData(mon_bap),
+gene_short_name %in% c("Hmgcs2", "Pparg", "Cebpb")))
+plot_genes_jitter(mon_bap[blast_genes,],
+    grouping = "State",
+    min_expr = 0.1)
+```
+
+
+
+#Supervised Pseudotime analysis
+```{r}
+Pparg_id <-
+    row.names(subset(fData(mon_bap), gene_short_name == "Pparg"))
+Klf4_id <-
+    row.names(subset(fData(mon_bap), gene_short_name == "Klf4"))
+
+cth <- newCellTypeHierarchy()
+
+cth <- addCellType(cth,
+                   "EarlyState",
+                   classify_func = function(x) { x[Klf4_id,] >= 1 })
+
+cth <- addCellType(cth,
+                   "LateState",
+                   classify_func = function(x) { x[Pparg_id,] >= 1 })
+
+mon_bap <- classifyCells(mon_bap, cth)
+
+#select genes which covary in each directon
+marker_diff <- markerDiffTable(mon_bap[expressed_genes,],
+                       cth,
+                       cores = 1)
+#semisup_clustering_genes <-
+    #row.names(subset(marker_diff, qval < 0.05))
+semisup_clustering_genes <-
+    row.names(marker_diff)[order(marker_diff$qval)][1:500]
+
+#Order and plot
+mon_bap <- setOrderingFilter(mon_bap, semisup_clustering_genes)
+#plot_ordering_genes(mon_bap)
+mon_bap <- reduceDimension(mon_bap, max_components = 2,
+    method = 'DDRTree', norm_method = 'log')
+mon_bap <- orderCells(mon_bap)
+#mon_bap <- orderCells(mon_bap, root_state = GM_state(HSMM_myo))
+plot_cell_trajectory(mon_bap, color_by = "Pseudotime") +
+    theme(legend.position = "right")
+
+
+blast_genes <- row.names(subset(fData(mon_bap), gene_short_name %in% c("Klf4", "Cebpb", "Pparg", "Hmgcs2", "Ucp1")))
+plot_genes_jitter(mon_bap[blast_genes,], grouping = "Pseudotime", min_expr = 0.1)
+```
+
+#Finding genes which change as a function of pseudotime
+```{r}
+
+to_be_tested <- row.names(subset(fData(mon_bap),
+gene_short_name %in% c("Klf4", "Cebpb", "Pparg", "Hmgcs2", "Ucp1")))
+cds_subset <- mon_bap[to_be_tested,]
+
+diff_test_res <- differentialGeneTest(cds_subset,
+fullModelFormulaStr = "~sm.ns(Pseudotime)")
+
+diff_test_res[,c("gene_short_name", "pval", "qval")]
+
+plot_genes_in_pseudotime(cds_subset, color_by = "timpoint")
+```
+
+
+#Redoing, trying to order genes based on the variance between clusters
+```{r}
+#detect genes at min expression of 0.1 and >= 10 cells expressing the gene
+mon_bap <- detectGenes(mon_bap, min_expr = 0.1)
+fData(mon_bap)$use_for_ordering <-
+    fData(mon_bap)$num_cells_expressed > 0.05 * ncol(mon_bap)
+
+plot_pc_variance_explained(mon_bap, return_all = F)
+
+#tSNE reduction
+mon_bap <- reduceDimension(mon_bap,
+                              max_components = 2,
+                              norm_method = 'log',
+                              num_dim = 20,
+                              reduction_method = 'tSNE',
+                              verbose = T)
+
+#Plotting
+mon_bap <- clusterCells(mon_bap, verbose = F)
+plot_cell_clusters(mon_bap, color_by = 'as.factor(Cluster)')
+plot_cell_clusters(mon_bap, color_by = 'as.factor(timpoint)')
+
+#Check rho-thershold for clustering
+mon_bap <- clusterCells(mon_bap,
+                 rho_threshold = 5,
+                 delta_threshold = 5,
+                 skip_rho_sigma = F,
+                 verbose = F)
+plot_cell_clusters(mon_bap, color_by = 'as.factor(Cluster)')
+```
+
+
+#Supervised Clustering - Klf4 and Ucp1
+#Supervised Pseudotime analysis
+```{r}
+Ucp1_id <-
+    row.names(subset(fData(mon_bap), gene_short_name == "Ucp1"))
+Klf4_id <-
+    row.names(subset(fData(mon_bap), gene_short_name == "Klf4"))
+
+cth <- newCellTypeHierarchy()
+
+cth <- addCellType(cth,
+                   "EarlyState",
+                   classify_func = function(x) { x[Klf4_id,] >= 1 })
+
+cth <- addCellType(cth,
+                   "LateState",
+                   classify_func = function(x) { x[Ucp1_id,] >= 1 })
+
+mon_bap <- classifyCells(mon_bap, cth)
+
+#select genes which covary in each directon
+marker_diff <- markerDiffTable(mon_bap[expressed_genes,],
+                       cth,
+                       cores = 1)
+#semisup_clustering_genes <-
+    #row.names(subset(marker_diff, qval < 0.05))
+semisup_clustering_genes <-
+    row.names(marker_diff)[order(marker_diff$qval)][1:500]
+
+#Order and plot
+mon_bap <- setOrderingFilter(mon_bap, semisup_clustering_genes)
+#plot_ordering_genes(mon_bap)
+mon_bap <- reduceDimension(mon_bap, max_components = 2,
+    method = 'DDRTree', norm_method = 'log')
+mon_bap <- orderCells(mon_bap)
+mon_bap <- orderCells(mon_bap, root_state = "9")
+plot_cell_trajectory(mon_bap, color_by = "Pseudotime") +
+    theme(legend.position = "right")
+
+
+blast_genes <- row.names(subset(fData(mon_bap), gene_short_name %in% c("Klf4", "Cebpb", "Pparg", "Hmgcs2", "Ucp1")))
+plot_genes_jitter(mon_bap[blast_genes,], grouping = "Pseudotime", min_expr = 0.1)
+```
+
+#Monocle analysis of APC's + Mature Adipocytes
+```{r}
+library(monocle)
+
+#Direct import of Seurat objects doesnt work with this version, so it is converted back to dataframes and imported directly.
+data <- as(as.matrix(adipo@assays$RNA@data), 'sparseMatrix')
+
+pd <- new('AnnotatedDataFrame', data = adipo@meta.data)
+
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+
+#Construct monocle cds
+madipo <- newCellDataSet(data,
+                         phenoData = pd,
+                         featureData = fd,
+                         lowerDetectionLimit = 0.5,
+                         expressionFamily = negbinomial.size())
+
+#precalculate
+madipo <- estimateSizeFactors(madipo)
+madipo <- estimateDispersions(madipo)
+
+#detect genes at min expression of 0.1 and >= 10 cells expressing the gene
+madipo <- detectGenes(madipo, min_expr = 0.25)
+print(head(fData(madipo)))
+expressed_genes <- row.names(subset(fData(madipo),
+    num_cells_expressed >= 10))
+
+#Add cell identity
+Ucp1_id <-
+    row.names(subset(fData(madipo), gene_short_name == "Ucp1"))
+Lox_id <-
+    row.names(subset(fData(madipo), gene_short_name == "Lox"))
+
+cth <- newCellTypeHierarchy()
+
+cth <- addCellType(cth,
+                   "Thermogenic",
+                   classify_func = function(x) { x[Ucp1_id,] >= 1 })
+
+cth <- addCellType(cth,
+                   "Proliferative",
+                   classify_func = function(x) { x[Lox_id,] >= 1 })
+
+madipo <- classifyCells(madipo, cth)
+
+#select genes which covary in each directon
+marker_diff <- markerDiffTable(madipo[expressed_genes,],
+                       cth,
+                       cores = 1)
+#semisup_clustering_genes <-
+    #row.names(subset(marker_diff, qval < 0.05))
+semisup_clustering_genes <-
+    row.names(marker_diff)[order(marker_diff$qval)][1:500]
+
+#Order and plot
+madipo <- setOrderingFilter(madipo, semisup_clustering_genes)
+#plot_ordering_genes(madipo)
+madipo <- reduceDimension(madipo, max_components = 2,
+    method = 'DDRTree', norm_method = 'log')
+madipo <- orderCells(madipo)
+
+plot_cell_trajectory(madipo, color_by = "Pseudotime") +
+    theme(legend.position = "right")
+
+```
+
+
+#Unsupervised Pseudotime
+```{r}
+madipo <- estimateSizeFactors(madipo)
+madipo <- estimateDispersions(madipo)
+
+madipo <- detectGenes(madipo, min_expr = 0.25)
+print(head(fData(madipo)))
+expressed_genes <- row.names(subset(fData(madipo),
+    num_cells_expressed >= 30))
+
+diff_test_res <- differentialGeneTest(madipo[expressed_genes,],
+              fullModelFormulaStr = "~seurat_clusters")
+ordering_genes <- row.names (subset(diff_test_res, qval < 0.01))
+
+madipo <- setOrderingFilter(madipo, ordering_genes)
+plot_ordering_genes(madipo)
+
+madipo <- setOrderingFilter(madipo, ordering_genes)
+plot_ordering_genes(madipo)
+
+#Reduce dimensionality
+madipo <- reduceDimension(madipo, max_components = 2,
+    method = 'DDRTree')
+
+```
+
+##Plotting pseudotime + trajectory
+```{r}
+#order cells along trajectory
+madipo <- orderCells(madipo)
+plot_cell_trajectory(madipo, color_by = "seurat_clusters")
+
+plot_cell_trajectory(madipo, color_by = "State") +
+    facet_wrap(~State, nrow = 1)
+```
+
+#tSNE reduction for ordering cells
+
+```{r}
+madipo <- detectGenes(madipo, min_expr = 0.25)
+fData(madipo)$use_for_ordering <-
+    fData(madipo)$num_cells_expressed > 0.05 * ncol(madipo)
+
+plot_pc_variance_explained(madipo, return_all = F)
+
+madipo <- reduceDimension(madipo,
+                              max_components = 2,
+                              norm_method = 'log',
+                              num_dim = 3,
+                              reduction_method = 'tSNE',
+                              verbose = T)
+
+madipo <- clusterCells(madipo, verbose = F, k = 500)
+
+plot_cell_clusters(madipo, color_by = 'as.factor(Cluster)')
+plot_cell_clusters(madipo, color_by = 'as.factor(timpoint)')
+
+clustering_DEG_genes <-
+    differentialGeneTest(madipo[expressed_genes,],
+          fullModelFormulaStr = '~Cluster',
+          cores = 1)
+
+madipo_ordering_genes <-
+    row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:1000]
+
+madipo <-
+    setOrderingFilter(madipo,
+        ordering_genes = madipo_ordering_genes)
+
+madipo <-
+    reduceDimension(madipo, method = 'DDRTree')
+
+madipo <-
+    orderCells(madipo)
+
+plot_cell_trajectory(madipo, color_by = "Pseudotime")
+```
+
+##MONOCLE1 is too slow for the large dataset. Now I try Monocle3
+```{r}
+library(monocle3)
+2
+
+
+#Figure Generation
+
+
+#IWAT TSNE, no axis labels
+DimPlot(iwatobj, label = TRUE, repel = TRUE, label.size = 4) + NoLegend() + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+#IWAT UMAP, no axis labels, Legend TRUE
+DimPlot(iwatobj, reduction = "umap", label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+FeaturePlot(iwatobj, reduction = "umap", features = c("Ucp1"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+FeaturePlot(iwatobj, reduction = "umap", features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+#With label
+DimPlot(iwatobj, label = TRUE, repel = TRUE, label.size = 4) + NoLegend() + theme(axis.text = element_blank(), axis.ticks = element_blank())
+
+#Featureplot Ucp1 + Hmgcs2
+FeaturePlot(iwatobj, features = c("Hmgcs2")) + NoAxes()
+
+#Subclustering for VlnPlots
+mat_adipo <- subset(iwatobj, idents = "Mature Adipocytes")
+VlnPlot(asc_obj, group.by = "timpoint", features = c("Hmgcs2")) + geom_violin(adjust =1,trim=TRUE,scale = "width")
+
+#set 1000width, 220 height
+vln_df = data.frame(Hmgcs2 = asc_obj[["RNA"]]@data["Hmgcs2",], Timepoint = asc_obj$timpoint)
+ggplot(vln_df, aes(x = Timepoint, y = Hmgcs2)) + geom_violin(aes(fill = Timepoint), adjust = 2, trim=TRUE, scale = "width") + geom_jitter(size = 0.5) + theme_bw() + ggtitle("ASC1 + ASC2") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5))
+
+vln_df = data.frame(Ucp1 = mat_adipo[["RNA"]]@data["Ucp1",], Timepoint = mat_adipo$timpoint)
+ggplot(vln_df, aes(x = Timepoint, y = Ucp1)) + geom_violin(aes(fill = Timepoint), adjust = 2, trim=TRUE, scale = "width") + geom_jitter(size = 0.5) + theme_bw() + ggtitle("Mature Adipocytes") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5))
+
+#ASC_obj plot
+DimPlot(asc_obj, label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+#Featureplot of Hmgcs2 in ASCs
+FeaturePlot(asc_obj, features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+#Rename + DotPlot
+asc_obj_new_ids <- c("WAPs", "BAPs", "Aregs", "E-ASC")
+names(asc_obj_new_ids) <- levels(asc_obj)
+asc_obj <- RenameIdents (asc_obj, asc_obj_new_ids)
+
+#DotPlot of top 5 FC
+DotPlot(asc_obj, features = c("Tnfaip6", "Fosb", "Nr4a1", "Serpine1", "Fos", "Sox4", "Lox", "Txnip", "Sfrp2", "Cyp1b1", "Chrdl1", "Cyp2f2", "Vit", "Gria4", "F3", "Gm12002", "Nova2", "Arhgef15", "Csf2rb", "Scarb1", "Hmgcs2"), cols = c("lightgray", "blue")) + RotatedAxis()
+
+#DotPlot of top 5 low p-value
+DotPlot(asc_obj, features = c("Fosb", "Fos", "Egr1", "Junb", "Jund", "Txnip", "Malat1", "Peg3", "Dnm3os", "Clec2d", "F3", "Gdf10", "Gas6", "Igfbp3", "Gsn", "Ushbp1", "Btnl9", "Mcf2l", "Pecam1", "Pkp4", "Hmgcs2"), cols = c("lightgray", "blue")) + RotatedAxis()
+
+#Hmgcs2 vlnplot within just WAP and BAP
+wap_obj <- subset(asc_obj, idents = c("WAPs"))
+
+vln_df1 = data.frame(Hmgcs2 = wap_obj[["RNA"]]@data["Hmgcs2",], Timepoint = wap_obj$timpoint)
+plot1 <- ggplot(vln_df1, aes(x = Timepoint, y = Hmgcs2)) + geom_violin(aes(fill = Timepoint), adjust = 1, trim=TRUE, scale = "width") + geom_jitter(size = 0.5) + theme_bw() + ggtitle("WAPs") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5))
+
+bap_obj <- subset(asc_obj, idents = c("BAPs"))
+
+vln_df = data.frame(Hmgcs2 = bap_obj[["RNA"]]@data["Hmgcs2",], Timepoint = bap_obj$timpoint)
+plot2 <- ggplot(vln_df, aes(x = Timepoint, y = Hmgcs2)) + geom_violin(aes(fill = Timepoint), adjust = 1, trim=TRUE, scale = "width") + geom_jitter(size = 0.5) + theme_bw() + ggtitle("BAPs") + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5)) + position
+
+
+#Supplemental - BAT - 'final_filtered_data_2023_06_30.RData'
+DimPlot(merged_object, label = TRUE, repel = TRUE, label.size = 4) + NoLegend() + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+#BAT whole depot timepoint
+DimPlot(merged_object, split.by = "orig.ident", label = FALSE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) + labs(title = element_blank())
+
+#Highlight timepoints
+#First, setting the current clustering to merged_object$seurat_clusters to save the data
+merged_object$seurat_clusters <- Idents(merged_object)
+
+#Setting orig.ident to new active ident
+Idents(merged_object) <- merged_object$orig.ident
+
+#TN Highlighted
+cond <- WhichCells(merged_object, idents = c("TN"))
+inverse <- WhichCells(merged_object, idents = c("RT", "CE"))
+TN_highlight <- DimPlot(merged_object, label=F, group.by="orig.ident", cells.highlight= list(cond, inverse), cols.highlight = c("darkblue", "darkred"), cols= "grey") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) + labs(title =c("TN")) + NoLegend()
+
+#RT Highlighted
+cond <- WhichCells(merged_object, idents = c("RT"))
+inverse <- WhichCells(merged_object, idents = c("TN", "CE"))
+RT_highlight <- DimPlot(merged_object, label=F, group.by="orig.ident", cells.highlight= list(cond, inverse), cols.highlight = c("darkblue", "darkred"), cols= "grey") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) + labs(title =c("RT")) + NoLegend()
+
+#CE Highlighted
+CE_cond <- WhichCells(merged_object, idents = c("CE"))
+CE_inverse <- WhichCells(merged_object, idents = c("TN", "RT"))
+CE_highlight <- DimPlot(merged_object, label=F, group.by="orig.ident", cells.highlight= list(CE_cond, CE_inverse), cols.highlight = c("darkblue", "darkred"), cols= "grey") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) + labs(title =c("CE")) + NoLegend()
+
+TN_highlight + RT_highlight + CE_highlight
+
+#RColorBrewer
+library(RColorBrewer)
+
+
+#FeaturePlot Hmgcs2 + Ucp1
+FeaturePlot(merged_object, features = c("Hmgcs2")) + NoAxes()
+FeaturePlot(merged_object, features = c("Ucp1")) + NoAxes()
+
+#Refactor orig.ident levels
+merged_object$orig.ident <- factor(x = merged_object$orig.ident, levels = c("TN", "RT", "CE")) # change the order of the factor levels
+Idents(merged_object) <- merged_object$orig.ident
+merged_object$orig.ident <- merged_object@orig.ident
+
+adipo$orig.ident <- factor(x = adipo$orig.ident, levels = c("TN", "RT", "CE")) # change the order of the factor levels
+Idents(adipo) <- adipo$orig.ident
+adipo$orig.ident <- adipo@orig.ident
+#DotPlot of Ketogenic related genes in only adipose, split.by orig.ident
+#Doesnt look very good
+DotPlot(adipo, group.by = "orig.ident", features = c("Ppara", "Ppargc1a", "Pdgfra", "Pdgfrb", "Bdh1", "Oxct1", "Ffar2", "Ffar3", "Hcar2", "Slc16a1", "Slc16a7", "Slc16a6", "Slc16a3", "Hmgcs1", "Hmgcs2", "Ucp1", "Dio2"), cols = c("lightgray", "blue3"), scale = TRUE, scale.max = 30) + RotatedAxis()
+
+#Selected Dotplot
+DotPlot(adipo, group.by = "orig.ident", features = c("Ppargc1a", "Bdh1", "Oxct1", "Slc16a1", "Slc16a7", "Slc16a6", "Slc16a3", "Hmgcs1", "Hmgcs2", "Ucp1"), cols = c("lightgray", "blue3")) + RotatedAxis()
+
+#VlnPlot of ketogenic related genes in adipose and split by orig.ident
+VlnPlot(adipo, group.by = "orig.ident", features = c("Ppara", "Ppargc1a", "Pdgfra", "Pdgfrb", "Bdh1", "Oxct1", "Ffar2", "Ffar3", "Hcar2", "Slc16a1", "Slc16a7", "Slc16a6", "Slc16a3", "Hmgcs1", "Hmgcs2", "Ucp1", "Dio2"), stack = T, flip = T, cols = brewer.pal(17, "YlGnBu")) + NoLegend()
+
+DimPlot(merged_object, cells.highlight = merged_object$orig.ident , label = FALSE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) + labs(title = element_blank())
+
+#Final figures of APCs + Adipocytes
+
+FeaturePlot(adipo, features = c("Dpp4"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+FeaturePlot(adipo, features = c("Pdgfra"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+FeaturePlot(adipo, features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+FeaturePlot(adipo, features = c("Pparg"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+
+FeaturePlot(adipo, features = c("Dpp4", "Pdgfra", "Hmgcs2", "Pparg", "Ucp1"), n=5)
+
+```
+
+
+#To gather conclusions about what types of cells are expressing Hmgcs2, I will subset Hmgcs2 positive cells and further study these cells
+```{r}
+
+hmgcs2.markers <- FindAllMarkers(adipo, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2, features = "Hmgcs2")
+
+hmgcs2.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+write.table(hmgcs2.markers, "hmgcs2.markers.csv", sep = "\t")
+
+Idents(adipo, WhichCells(object = adipo, expression = Hmgcs2 > 0, slot = 'data')) <- 'hmgcs2.pos'
+Idents(adipo, WhichCells(object = adipo, expression = Hmgcs2 <= 0, slot = 'data')) <- 'hmgcs2.neg'
+hmgcs2.markers <- FindMarkers(adipo, ident.1 = 'hmgcs2.pos', ident.2 = 'hmgcs2.neg')
+hmgcs2.markers %>%
+group_by(c("hmgcs2.pos", "hmgcs2.neg")) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+write.table(hmgcs2.markers, "hmgcs2.markers.csv", sep = "\t")
+write.table(genes, "hmgcs2.markers.csv", sep = "\t")
+
+#Now subset to look at just APCs, b/c expression of Hmgcs2 is only here
+Idents(adipo) <- adipo$seurat_clusters
+apc <- subset(adipo, idents = c("BAPs", "WAPs"))
+
+apc <- NormalizeData(apc)
+adipo <- FindVariableFeatures(apc, selection.method = "vst")
+apc <- ScaleData(apc, features = rownames(apc), vars.to.regress = "percent.mt")
+apc <- RunPCA(apc, npcs = 50)
+apc <- FindNeighbors(apc, dims = 1:20)
+apc <- FindClusters(apc, resolution = 0.20)
+
+apc <- RunUMAP(apc, dims = 1:20)
+DimPlot(apc)
+DimPlot(apc, group.by = "timpoint")
+
+
+FeaturePlot(apc, features = c("Hmgcs2"))
+
+
+Idents(apc, WhichCells(object = apc, expression = Hmgcs2 > 0, slot = 'data')) <- 'hmgcs2.pos'
+Idents(apc, WhichCells(object = apc, expression = Hmgcs2 <= 0, slot = 'data')) <- 'hmgcs2.neg'
+hmgcs2.markers <- FindMarkers(apc, ident.1 = 'hmgcs2.pos', ident.2 = 'hmgcs2.neg')
+
+write.table(hmgcs2.markers, "hmgcs2.markers.csv", sep = "\t")
+
+#Create DotPlot of Hmgcs2_pos co-expressed genes lowest p-values
+DotPlot(adipo, features = c("Gm42418","Hmcn1","Serpinf1","Robo2","Penk","Ifitm3","Cenpp","Cdh11","Dcn","Fam102b","Rnase4","Prdx1","Tgfbr1","Col13a1","Gm30075","Lama2","Rerg","Rabgap1l","Pabpc4l","Hsd11b1","Gm16638"), cols = c("gray", "blue"), scale = TRUE) + RotatedAxis()
+
+FeaturePlot(adipo, features = c("Gm42418","Hmcn1","Serpinf1","Robo2","Penk","Ifitm3","Cenpp","Cdh11","Dcn","Fam102b","Rnase4","Prdx1","Tgfbr1","Col13a1","Gm30075","Lama2","Rerg","Rabgap1l","Pabpc4l","Hsd11b1","Gm16638"), cols = c("gray", "blue"))
+
+FeaturePlot(adipo, "Hmgcs2")
+
+adipo$hmgcs2_highlight <- WhichCells(object = adipo, expression = Hmgcs2 > 0 & Serpinf1 > 0, slot = 'data')
+
+DimPlot(adipo, cells.highlight = WhichCells(adipo, WhichCells(object = adipo, expression = Tgfbr1 > 0 & Ctgf > 0, slot = 'data')), cols.highlight = c("blue")) + NoLegend() + ggtitle("Hmgcs2 Tgfbr1 Co-expression") + theme(plot.title = element_text(hjust = 0.5)) 
+
+FeaturePlot(adipo, features = c("Hmgcs2", "Tgfbr1"), blend = TRUE, cols = c("lightgray", "blue", "red"), pt.size = 0.5, blend.threshold = 0.1)
+
+Idents(adipo) <- adipo$seurat_clusters
+
+
+#Investigating genes from Lecoutre et al. Mol Metab. 2022.
+
+FeaturePlot(adipo, features = c("Zfp36", "Smad2", "Smad3", "Bmp4"))
+FeaturePlot(adipo, features = c("Hmgcs2", "Smad2"), blend = T)
+
+#Tgfbr cells should coexpress Ctgf, Loxl1, and Fn1
+FeaturePlot(adipo, features = c("Tgfbr1", "Ctgf", "Loxl1", "Fn1", "Hmgcs2"), ncol = 5)
+
+DimPlot(adipo, cells.highlight = WhichCells(adipo, WhichCells(object = adipo, expression = Tgfbr1 > 0 & Ctgf > 0, slot = 'data')), cols.highlight = c("blue")) + NoLegend() + ggtitle("Tgfbr1 Ctgf Co-expression") + theme(plot.title = element_text(hjust = 0.5)) 
+
+summary(WhichCells(object = adipo, expression = Tgfbr1 > 0, slot = 'data'))
+summary(WhichCells(object = adipo, expression = Ctgf > 0, slot = 'data'))
+summary(WhichCells(object = adipo, expression = Tgfbr1 > 0 & Ctgf > 0, slot = 'data'))
+
+
+DimPlot(adipo, cells.highlight = WhichCells(adipo, WhichCells(object = adipo, expression = Tgfbr1 > 0 & Loxl1 > 0, slot = 'data')), cols.highlight = c("blue")) + NoLegend() + ggtitle("Tgfbr1 Loxl1 Co-expression") + theme(plot.title = element_text(hjust = 0.5)) 
+
+DimPlot(adipo, cells.highlight = WhichCells(adipo, WhichCells(object = adipo, expression = Tgfbr1 > 0 & Fn1 > 0, slot = 'data')), cols.highlight = c("blue")) + NoLegend() + ggtitle("Tgfbr1 Fn1 Co-expression") + theme(plot.title = element_text(hjust = 0.5)) 
+
+
+#How many cells co expressing?
+summary(WhichCells(object = adipo, expression = Hmgcs2 > 0, slot = 'data'))
+summary(WhichCells(object = adipo, expression = Rnase4 > 0, slot = 'data'))
+
+summary(WhichCells(object = adipo, expression = Tgfbr1 > 0, slot = 'data'))
+summary(WhichCells(object = adipo, expression = Hmgcs2 > 0 & Tgfbr1 > 0, slot = 'data'))
+
+summary(WhichCells(object = adipo, expression = Hmgcs2 > 0 & Serpinf1 > 0, slot = 'data'))
+
+
+```
+
+
+
+```{r}
+#Going back to iwatobj to subcluster the fibrogenic progenitors with ASC and Mature Adipocytes
+
+#While trying to look for MSC in adipo subcluster i checked Dpp4, which iss known to be a multipotent progenitor. Icam1 also known to be commited preadipocyte marker. Didnt see these but i remembered seeing these in the FIP population. I‘m going to go back to IWAT, and subcluster all these adipose like cells and see if I can recapitulate this
+
+#The co-expressed genes with Hmgcs2 in APCs/ASCs implicate the fibrobotic/adipogenic switch from MSC, therefore we may better visualize this switch by clustering these all together.
+
+DimPlot(iwatobj)
+adipo <- subset(iwatobj, idents = c("Adipose Stem Cells 1(ASC1)", "Adipose Stem Cells 2(ASC2)", "Fibro-Inflammatory Progenitors(FIPs)", "Mature Adipocytes"))
+Idents(adipo) <- adipo$timpoint
+adipo <- subset(adipo, idents = c("RT", "24hr", "48hr", "4day"))
+
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo), vars.to.regress = "percent.mt")
+adipo <- RunPCA(adipo, npcs = 50)
+ElbowPlot(adipo, n = 50)
+
+
+
+adipo <- FindNeighbors(adipo, dims = 1:30)
+adipo <- FindClusters(adipo, resolution = 0.5)
+
+adipo <- RunUMAP(adipo, dims = 1:30)
+DimPlot(adipo, reduction = "umap")
+
+
+DimPlot(adipo, reduction = "umap", group.by = "timpoint")
+FeaturePlot(adipo, features = c("Egr1", "Lox", "F3", "Cdh5", "Hmgcs2", "Cd81"))
+DotPlot(adipo, features = c("Egr1", "Lox", "F3", "Cdh5", "Hmgcs2"))
+
+adipo.markers_05res <- FindAllMarkers(adipo, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+adipo.markers_05res %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+write.table(adipo.markers_05res, "adipo.markers_05res.csv", sep = "\t")
+
+#Going to remove E-ASC and see if MSC clustering is closer
+adipo <- subset(adipo, idents = c("0", "1", "2", "3", "4", "5", "6", "8", "9"))
+
+
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo) ,vars.to.regress = "percent.mt")
+adipo <- RunPCA(adipo, npcs = 50)
+ElbowPlot(adipo, n = 50)
+
+adipo <- FindNeighbors(adipo, dims = 1:35)
+adipo <- FindClusters(adipo, resolution = 0.4)
+
+adipo <- RunUMAP(adipo, dims = 1:35)
+DimPlot(adipo, reduction = "umap")
+
+adipo$seurat_clusters <- Idents(adipo)
+#adipo_newid <- c("BAPs", "WAPs", "Mature Adipocytes", "Mature White Adipocytes", "Adipose Stem Cells (ASCs)", "Mature Adipocytes", "Thermogenic Mature Adipocytes")
+adipo_newid <- c("BAPs", "WAPs", "Mature White Adipocytes", "Mature Adipocytes", "Adipose Stem Cells (ASCs)", "Thermogenic Mature Adipocytes", "Mature Adipocytes")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+adipo$seurat_clusters <- Idents(adipo)
+
+#Reordering cluster
+Idents(adipo) <- adipo$seurat_clusters
+adipo$seurat_clusters <- factor(x = adipo$seurat_clusters, levels = c("Adipose Stem Cells (ASCs)", "WAPs", "BAPs", "Mature Adipocytes", "Mature White Adipocytes", "Thermogenic Mature Adipocytes"))
+adipo@active.ident <- adipo$seurat_clusters
+
+#Showing clustering by genes
+FeaturePlot(adipo, features = c("Dpp4", "Egr1", "Lox", "Hmgcs2", "Ucp1", "Adipoq"))
+DotPlot(adipo, features = c("Dpp4", "Egr1", "Lox", "Hmgcs2", "Ucp1", "Adipoq"))
+
+FeaturePlot(adipo, features = c("Serpinf1", "Rnase4", "Tgfbr1", "Ly6a"))
+
+FeaturePlot(adipo, features = c("Cd44", "Icam1", "Fabp4", "Lpl"))
+
+FeaturePlot(adipo, features = c("Pi16", "Ly6a", "Pdgfra", "Ppargc1a", "Adipoq", "Plin1"), ncol = 6)
+
+
+#Finding markers for hmgcs2
+progenitors <- subset(adipo, idents = c("Adipose Stem Cells (ASCs)", "WAPs", "BAPs"))
+
+Idents(progenitors, WhichCells(object = progenitors, expression = Hmgcs2 > 0, slot = 'data')) <- 'hmgcs2.pos'
+Idents(progenitors, WhichCells(object = progenitors, expression = Hmgcs2 <= 0, slot = 'data')) <- 'hmgcs2.neg'
+hmgcs2_progenitors.markers <- FindMarkers(progenitors, ident.1 = 'hmgcs2.pos', ident.2 = 'hmgcs2.neg', only.pos = FALSE, min.pct = 0.1, logfc.threshold = 0.2)
+hmgcs2_progenitors.markers %>%
+#group_by(c("hmgcs2.pos", "hmgcs2.neg")) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+write.table(hmgcs2_progenitors.markers, "20240307_hmgcs2_progenitors.markers.csv", sep = "\t")
+
+
+#Looking at progenitor population seperately
+
+progenitors <- NormalizeData(progenitors)
+progenitors <- FindVariableFeatures(progenitors, selection.method = "vst")
+progenitors <- ScaleData(progenitors, features = rownames(progenitors), vars.to.regress = "percent.mt")
+progenitors <- RunPCA(progenitors, npcs = 50)
+ElbowPlot(progenitors, n = 50)
+
+progenitors <- FindNeighbors(progenitors, dims = 1:10)
+progenitors <- FindClusters(progenitors, resolution = 0.4)
+
+progenitors <- RunUMAP(progenitors, dims = 1:10)
+DimPlot(progenitors, reduction = "umap")
+DimPlot(progenitors, reduction = "umap", group.by = "timpoint")
+
+FeaturePlot(progenitors, features = c("Serpinf1", "Rnase4", "Tgfbr1", "Ly6a", "Hmgcs2", "Cd81"))
+
+
+#Im now going to subset only APCs, MSCs and low fate mature
+
+adipo <- subset(adipo, idents = c("0", "1", "4", "7"))
+DimPlot(adipo)
+
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo) ,vars.to.regress = "percent.mt")
+adipo <- RunPCA(adipo, npcs = 50)
+ElbowPlot(adipo, n = 50)
+
+adipo <- FindNeighbors(adipo, dims = 1:20)
+adipo <- FindClusters(adipo, resolution = 0.4)
+
+adipo <- RunUMAP(adipo, dims = 1:20)
+DimPlot(adipo, reduction = "umap")
+
+FeaturePlot(adipo, features = c("Dpp4", "Hmgcs2", "Egr1", "Cd81", "Fabp4"))
+
+```
+
+
+```{r}
+#Looking at the percent.mt, I try subsetting the adipo object at 3.5, to try and retain as much of the 24hr conditon as welll
+
+adipo <- subset(adipo, subset = percent.mt < 3.5)
+table(adipo$timpoint)
+
+VlnPlot(adipo, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"))
+
+#Run w/o regression and plotting UMAP
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo))
+#adipo <- ScaleData(adipo, features = rownames(adipo) ,vars.to.regress = "percent.mt")
+adipo <- RunPCA(adipo, npcs = 50)
+ElbowPlot(adipo, n = 50)
+
+adipo <- FindNeighbors(adipo, dims = 1:20)
+adipo <- FindClusters(adipo, resolution = 0.4)
+
+adipo <- RunUMAP(adipo, dims = 1:20)
+DimPlot(adipo, reduction = "umap")
+
+
+#Run with regression and plot UMAP
+adipo <- NormalizeData(adipo)
+adipo <- FindVariableFeatures(adipo, selection.method = "vst")
+adipo <- ScaleData(adipo, features = rownames(adipo) ,vars.to.regress = "percent.mt")
+adipo <- RunPCA(adipo, npcs = 50)
+ElbowPlot(adipo, n = 50)
+
+adipo <- FindNeighbors(adipo, dims = 1:33)
+adipo <- FindClusters(adipo, resolution = 0.95)
+
+adipo_test <- RunUMAP(adipo, dims = 1:33, spread = 5)
+DimPlot(adipo, reduction = "umap")
+
+FeaturePlot(adipo, features = c("Dpp4", "Pdgfra", "Pdgfrb", "Cd81", "Lox", "Egr1", "Adipoq", "Ucp1"), ncol= 4)
+
+FeaturePlot(adipo, features = c("Zfp423", "Pref-1"))
+
+FeaturePlot(adipo, features = c("Dpp4", "Pdgfra", "Hmgcs2", "Pparg", "Ucp1"), n=5)
+
+#Labelling new adipo cluster
+adipo_newid <- c("BAPs", "WAPs", "Mature White Adipocytes", "Multipotent Mesenchymal Stem Cells", "Adipocytes", "Mature Thermogenic Adipocytes", "Adipocytes", "Adipocytes", "Endothelial Derived MSCs")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+adipo$seurat_clusters <- Idents(adipo)
+
+#Reordering cluster
+Idents(adipo) <- adipo$seurat_clusters
+adipo$seurat_clusters <- factor(x = adipo$seurat_clusters, levels = c("Multipotent Mesenchymal Stem Cells", "Endothelial Derived MSCs", "WAPs", "BAPs", "Adipocytes", "Mature White Adipocytes", "Mature Thermogenic Adipocytes"))
+adipo@active.ident <- adipo$seurat_clusters
+
+#Using res = 0.95 to identify progenitors for both mature white and mature thermogenic progenitors
+DimPlot(adipo, reduction = "umap")
+DimPlot(adipo, reduction = "umap", group.by = "timpoint")
+
+adipo_newid <- c("WAPs", "BAPs", "Multipotent Mesenchymal Stem Cells", "Mature White Adipocytes", "Thermogenic Pre-Adipocytes", "BAPs", "Thermogenic Pre-Adipocytes", "BAPs", "White Pre-Adipocytes", "Mature Thermogenic Adipocytes", "Mature Thermogenic Adipocytes", "Thermogenic Pre-Adipocytes", "Endothelial Derived MSCs")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+adipo$seurat_clusters <- Idents(adipo)
+DimPlot(adipo, reduction = "umap")
+
+#Making WAPs and BAPs full id name
+adipo_newid <- c("Multipotent Mesenchymal Stem Cells (MSCs)", "Endothelial Derived Mesenchymal Stem Cells (E-MSCs)", "White Adipocyte Progenitors (WAPs)", "Beige Adipocyte Progenitors (BAPs)", "White Pre-Adipocytes", "Mature White Adipocytes", "Thermogenic Pre-Adipocytes", "Mature Thermogenic Adipocytes")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+adipo$seurat_clusters <- Idents(adipo)
+
+
+Idents(adipo) <- adipo$seurat_clusters
+adipo$seurat_clusters <- factor(x = adipo$seurat_clusters, levels = c("Multipotent Mesenchymal Stem Cells", "Endothelial Derived MSCs", "WAPs", "BAPs", "White Pre-Adipocytes", "Mature White Adipocytes", "Thermogenic Pre-Adipocytes", "Mature Thermogenic Adipocytes"))
+adipo@active.ident <- adipo$seurat_clusters
+DimPlot(adipo, reduction = "umap")
+
+#Change back to shortform
+adipo_newid <- c("MSCs", "E-MSCs", "WAPs", "BAPs", "White Pre-Adipocytes", "Mature White Adipocytes", "Thermogenic Pre-Adipocytes", "Mature Thermogenic Adipocytes")
+names(adipo_newid) <- levels(adipo)
+adipo <- RenameIdents (adipo, adipo_newid)
+adipo$seurat_clusters <- Idents(adipo)
+
+#Figures
+DimPlot(adipo, reduction = "umap", label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+DimPlot(adipo, reduction = "umap", label = TRUE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) + NoLegend()
+
+#Plotting genes for figure
+library(ggpubr)
+
+FeaturePlot(adipo, features = c("Dpp4", "Pdgfra", "Hmgcs2", "Pparg", "Ucp1", "Adipoq"), label = TRUE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) + NoLegend()
+
+
+adipo_ce_dpp4 <- FeaturePlot(adipo, features = c("Dpp4"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+adipo_ce_pdgfra <- FeaturePlot(adipo, features = c("Pdgfra"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+adipo_ce_Hmgcs2 <- FeaturePlot(adipo, features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+adipo_ce_Pparg <- FeaturePlot(adipo, features = c("Pparg"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+adipo_ce_Ucp1 <- FeaturePlot(adipo, features = c("Ucp1"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+adipo_ce_Adipoq <- FeaturePlot(adipo, features = c("Adipoq"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+adipo_ce_Hcar2 <- FeaturePlot(adipo, features = c("Hcar2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+adipo_ce_Ffar2 <- FeaturePlot(adipo, features = c("Ffar2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+library(ggpubr)
+figure <- ggarrange(adipo_ce_dpp4, adipo_ce_pdgfra, adipo_ce_Hmgcs2, adipo_ce_Pparg, adipo_ce_Ucp1, adipo_ce_Adipoq, adipo_ce_Hcar2, adipo_ce_Ffar2,
+                    ncol = 4, nrow = 2)
+figure
+
+figure <- ggarrange(adipo_ce_dpp4, adipo_ce_pdgfra, adipo_ce_Hmgcs2, adipo_ce_Ucp1,
+                    ncol = 4, nrow = 1)
+figure
+
+#FeaturePlot for figure
+FeaturePlot(cl_adipo, features = c("Hmgcs2", "Hcar2", "Ffar2"), label = FALSE, repel = TRUE, label.size = 4, ncol = 3) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) & NoLegend() 
+
+Idents(cl_adipo) <- cl_adipo$seurat_clusters
+DotPlot(cl_adipo, features = c("Hmgcs2", "Hcar2", "Ffar2"), cols = c("gray", "blue"), scale = TRUE) + theme(axis.text.x = element_text(face = 'italic')) 
+
+Idents(adipo) <- adipo$seurat_clusters
+DotPlot(adipo, features = c("Hmgcs2", "Hcar2", "Ffar2"), cols = c("gray", "blue"), scale = TRUE) + theme(axis.text.x = element_text(face = 'italic')) 
+
+
+FeaturePlot(adipo, features = c("Hmgcs2", "Hcar2", "Ffar2"), label = FALSE, repel = TRUE, label.size = 4, ncol = 3) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) & NoLegend() 
+
+FeaturePlot(adipo, features = c("Ffar2", "Hcar2", "Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4, ncol = 3) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) & NoLegend() 
+
+Idents(cl_adipo) <- cl_adipo$seurat_clusters
+DotPlot(cl_adipo, features = c("Hmgcs2", "Hcar2", "Ffar2"), cols = c("gray", "blue"), scale = TRUE)
+
+
+#Plotting pseudotime with FeaturePlot
+FeaturePlot(integrated_adipo, features = "monocle3_pseudotime", cols = c("lightgray", "blue"))
+
+#Finding marker genes for all clusters for dotplot here
+
+adipo.markers <- FindAllMarkers(adipo, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+adipo.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+
+write.table(adipo.markers, "adipo.markers.csv", sep = "\t")
+
+#Plotting Top 5 logFC genes per cluster, filtering only genes with pct1/pct2 > 2
+#Inclue Ffar2 it seems to be white preadipo specific
+top5up <- c("Smpd3","Edn1","Sema3c","Pi16","Dpp4",
+"Gm12002","Nova2","Bcl6b","Csf2rb","Ggta1","Has1","Tnfaip6","Nr4a1","Fgl2","Fosb", "Cyp1b1","Dnm3os","Lox","Mgp","Msc","Nnat","Celsr2","Chst1","Gm48832","Acvr1c","Hp","Fam110c","Dnajb1",
+"Zfp703","Rasd1","Pmvk","Acaca","Sorbs1","Acsl1","Retn","Lgr6","Perm1","Ppara","Acot11","Slc27a2")
+
+DotPlot(adipo, features = top5up, cols = c("gray", "blue"), scale = TRUE) + RotatedAxis() + theme(axis.text.x = element_text(size = 10))
+
+top3up <- c("Smpd3","Edn1","Sema3c",
+"Gm12002","Nova2","Bcl6b",
+"Has1","Tnfaip6","Nr4a1",
+"Cyp1b1","Dnm3os","Lox",
+"Nnat","Celsr2","Chst1",
+"Hp","Fam110c","Dnajb1",
+"Pmvk","Acaca","Sorbs1",
+"Lgr6","Perm1","Ppara")
+
+DotPlot(adipo, features = top3up, cols = c("gray", "blue"), scale = TRUE) + RotatedAxis() + theme(axis.text.x = element_text(size = 10))
+
+DotPlot(adipo, features = top3up, cols = c("gray", "blue"), scale = TRUE) + RotatedAxis() + coord_flip()
+
+DoHeatmap(adipo, features = top5up, angle = 30, size = 3, slot = "scale.data") + scale_fill_gradientn(colors = c("blue", "white", "red")) 
+
+```
+
+```{r}
+#I want to see if im able to resolve preadipocytes when clustering just 'adipocyte' cells and regressing for percent.mt
+
+#Subset adipocytes
+
+mat_adipo <- subset(adipo, idents = c("2", "4", "5", "6", "7"))
+DimPlot(mat_adipo)
+
+mat_adipo <- NormalizeData(mat_adipo)
+mat_adipo <- FindVariableFeatures(mat_adipo, selection.method = "vst")
+mat_adipo <- ScaleData(mat_adipo, features = rownames(mat_adipo) ,vars.to.regress = "percent.mt")
+mat_adipo <- RunPCA(mat_adipo, npcs = 50)
+ElbowPlot(mat_adipo, n = 50)
+
+mat_adipo <- FindNeighbors(mat_adipo, dims = 1:10)
+mat_adipo <- FindClusters(mat_adipo, resolution = 0.4)
+
+mat_adipo <- RunUMAP(mat_adipo, dims = 1:10)
+DimPlot(mat_adipo, reduction = "umap")
+
+FeaturePlot(mat_adipo, features = c("Ucp1", "Adipoq", "Pparg", "Klf4", "Zfp423"), n=5)
+
+
+```
+
+```{r}
+#Now im performing everything again but with just RT and CL object
+
+DimPlot(iwatobj_cl)
+cl_adipo <- subset(iwatobj_cl, idents = c("ASC1", "ASC3", "Adipocytes"))
+Idents(cl_adipo) <- cl_adipo$timpoint
+
+cl_adipo <- subset(cl_adipo, subset = percent.mt < 3.5)
+table(cl_adipo$timpoint)
+
+VlnPlot(cl_adipo, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"))
+
+#Run w/o regression and plotting UMAP
+cl_adipo <- NormalizeData(cl_adipo)
+cl_adipo <- FindVariableFeatures(cl_adipo, selection.method = "vst")
+cl_adipo <- ScaleData(cl_adipo, features = rownames(cl_adipo) ,vars.to.regress = "percent.mt")
+cl_adipo <- RunPCA(cl_adipo, npcs = 50)
+ElbowPlot(cl_adipo, n = 50)
+
+cl_adipo <- FindNeighbors(cl_adipo, dims = 1:32)
+cl_adipo <- FindClusters(cl_adipo, resolution = 0.6)
+
+cl_adipo <- RunUMAP(cl_adipo, dims = 1:32)
+DimPlot(cl_adipo, reduction = "umap")
+
+DimPlot(cl_adipo, reduction = "umap", group.by = "timpoint")
+
+FeaturePlot(cl_adipo, features = c("Dpp4", "Egr1"))
+FeaturePlot(cl_adipo, features = c("Lox", "Pdgfra", "Ucp1", "Hmgcs2"))
+
+#Renaming clusters cl_adipo
+adipo_newid <- c("Beige Adipocyte Progenitors(BAPs)", "White Adipocyte Progenitors(WAPs)", "Mature White Adipocytes", "Thermogenic Pre-Adipocytes", "Thermogenic Pre-Adipocytes", "White Pre-Adipocytes", "Multipotent Mesenchymal Stem Cells(MSCs)",  "Mature Thermogenic Adipocytes", "Thermogenic Pre-Adipocytes", "White Adipocyte Progenitors(WAPs)", "Thermogenic Pre-Adipocytes")
+names(adipo_newid) <- levels(cl_adipo)
+cl_adipo <- RenameIdents (cl_adipo, adipo_newid)
+cl_adipo$seurat_clusters <- Idents(cl_adipo)
+DimPlot(cl_adipo, reduction = "umap")
+
+
+Idents(cl_adipo) <- cl_adipo$seurat_clusters
+cl_adipo$seurat_clusters <- factor(x = cl_adipo$seurat_clusters, levels = c("Multipotent Mesenchymal Stem Cells(MSCs)", "White Adipocyte Progenitors(WAPs)", "Beige Adipocyte Progenitors(BAPs)", "White Pre-Adipocytes", "Mature White Adipocytes", "Thermogenic Pre-Adipocytes", "Mature Thermogenic Adipocytes"))
+cl_adipo@active.ident <- cl_adipo$seurat_clusters
+
+#CL adipo Figure
+DimPlot(cl_adipo, reduction = "umap") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+#Convert to shortform
+adipo_newid <- c("MSCs", "WAPs", "BAPs", "White Pre-Adipocytes", "Mature White Adipocytes", "Thermogenic Pre-Adipocytes", "Mature Thermogenic Adipocytes")
+names(adipo_newid) <- levels(cl_adipo)
+cl_adipo <- RenameIdents (cl_adipo, adipo_newid)
+cl_adipo$seurat_clusters <- Idents(cl_adipo)
+DimPlot(cl_adipo, reduction = "umap")
+
+#Convert back to longform
+adipo_newid <- c("Multipotent Mesenchymal Stem Cells(MSCs)", "White Adipocyte Progenitors(WAPs)", "Brown Adipocyte Progenitors(BAPs)", "White Pre-Adipocytes", "Mature White Adipocytes", "Thermogenic Pre-Adipocytes", "Mature Thermogenic Adipocytes")
+names(adipo_newid) <- levels(cl_adipo)
+cl_adipo <- RenameIdents (cl_adipo, adipo_newid)
+cl_adipo$seurat_clusters <- Idents(cl_adipo)
+DimPlot(cl_adipo, reduction = "umap") + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+#Find markers for adipo - CL for dotplot
+CL_adipo.markers <- FindAllMarkers(cl_adipo, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.2)
+
+CL_adipo.markers %>%
+group_by(cluster) %>%
+slice_max(n = 2, order_by = avg_log2FC)
+write.table(CL_adipo.markers, "CL_adipo.markers.csv", sep = "\t")
+
+
+cl_adipo_top5up <- c("Smpd3", "Ston2", "Pi16", "Tmem100", "Ackr3"
+,"Tnfaip6","Has1","Slco2a1","Frem1","Cacna1g"
+,"Gm8113","Aox3","Msc","Gpc6","Olfr1033"
+,"Nnat","Gas6","Chst1","Eepd1","Podn"
+,"Hp","Irf4","Gpx1","Dnajb1","Lrg1"
+,"Grin2b","Fasn","Fam69b","Gm45716","Ctcflos"
+,"Ucp1","Cidea","Pank1","Ppara","Ppargc1a"
+)
+
+DotPlot(cl_adipo, features = cl_adipo_top5up, cols = c("gray", "blue"), scale = TRUE) + RotatedAxis() + theme(axis.text.x = element_text(size = 10))
+
+
+cl_adipo_dpp4 <- FeaturePlot(cl_adipo, features = c("Dpp4"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+cl_adipo_pdgfra <- FeaturePlot(cl_adipo, features = c("Pdgfra"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank())
+
+cl_adipo_Hmgcs2 <- FeaturePlot(cl_adipo, features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+cl_adipo_Pparg <- FeaturePlot(cl_adipo, features = c("Pparg"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+cl_adipo_Ucp1 <- FeaturePlot(cl_adipo, features = c("Ucp1"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+cl_adipo_Adipoq <- FeaturePlot(cl_adipo, features = c("Adipoq"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+cl_adipo_Hcar2 <- FeaturePlot(cl_adipo, features = c("Hcar2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+cl_adipo_Ffar2 <- FeaturePlot(cl_adipo, features = c("Ffar2"), label = FALSE, repel = TRUE, label.size = 4) + theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank()) 
+
+library(ggpubr)
+figure <- ggarrange(cl_adipo_dpp4, cl_adipo_pdgfra, cl_adipo_Hmgcs2, cl_adipo_Pparg, cl_adipo_Ucp1, cl_adipo_Adipoq, cl_adipo_Hcar2, cl_adipo_Ffar2,
+                    ncol = 4, nrow = 2)
+figure
+
+figure <- ggarrange(cl_adipo_dpp4, cl_adipo_pdgfra, cl_adipo_Hmgcs2, cl_adipo_Ucp1,
+                    ncol = 4, nrow = 1)
+figure
+
+
+#Figure
+FeaturePlot(cl_adipo, features = c("Dpp4", "Ly6a","Pdgfra", "Cebpd", "Cebpa", "Adipoq", "Ucp1"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all", ncol = 7) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) + NoLegend()
+
+FeaturePlot(cl_adipo, features = c("Hmgcs2"), label = FALSE, repel = TRUE, label.size = 4, keep.scale = "all", ncol = 1) & theme(axis.text = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), axis.title = element_blank(), plot.title = element_text(face = 'italic')) + NoLegend()
+
+```
+
+#Exporting RDS for Github
+```{r}
+#setwd("~/Desktop/Kim Lab/Bioinformatics/IWAT")
+setwd("~/Desktop/Hmgcs2 in Adipose Precursors/Hmgcs2-in-Adipose-Precursors")
+saveRDS(adipo, "Adipocytes_ASCs_RT_CE_Subclustered_Seurat_Object")
+saveRDS(cl_adipo, "Adipocytes_ASCs_RT_CL_Subclustered_Seurat_Object")
+
+#Monocle3 object
+saveRDS(adipo_cds, "monocle3cds_Adipocytes_ASCs_RT_CL_Subclustered_Seurat_Object")
+```
+
+
